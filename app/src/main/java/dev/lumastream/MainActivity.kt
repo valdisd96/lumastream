@@ -88,6 +88,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import android.app.AlertDialog
+import androidx.media3.common.C
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.datasource.ByteArrayDataSource
+import androidx.media3.datasource.DataSource
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.common.Format
+import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.text.DefaultSubtitleParserFactory
+import androidx.media3.extractor.text.SubtitleExtractor
 
 private const val PLAYER_TAG = "LumaPlayer"
 private const val SINTEL_URL = "https://webtorrent.io/torrents/sintel.torrent"
@@ -96,6 +107,55 @@ private const val SINTEL_URL = "https://webtorrent.io/torrents/sintel.torrent"
 class MainActivity : ComponentActivity() {
     private val model: PlaybackViewModel by viewModels()
     private var activePlayerView: PlayerView? = null
+    private var choosingSubtitle = false
+    private val subtitlePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        choosingSubtitle = false
+        if (uri != null) model.loadSubtitle(uri)
+    }
+
+    private fun showSubtitles() {
+        val player = model.screen.value.player ?: return
+        val tracks = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+            .flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
+        val labels = listOf("Off", "Choose external SRT / VTT…", "Load HTTPS subtitle URL…") + tracks.map { (group, index) ->
+            val format = group.getTrackFormat(index)
+            val name = format.label ?: format.language ?: "Subtitle ${index + 1}"
+            if (group.isTrackSelected(index)) "$name (selected)" else name
+        }
+        AlertDialog.Builder(this).setTitle("Subtitles").setItems(labels.toTypedArray()) { _, choice ->
+            when (choice) {
+                0 -> player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                1 -> {
+                    player.pause()
+                    try {
+                        choosingSubtitle = true
+                        subtitlePicker.launch(arrayOf("*/*"))
+                    } catch (_: ActivityNotFoundException) {
+                        choosingSubtitle = false
+                        AlertDialog.Builder(this).setMessage("This TV has no document picker. Install a document picker to load external subtitles.")
+                            .setPositiveButton("OK", null).show()
+                    }
+                }
+                2 -> {
+                    val input = android.widget.EditText(this).apply {
+                        hint = "https://…/subtitles.srt"
+                        inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+                        setSingleLine()
+                    }
+                    AlertDialog.Builder(this).setTitle("SRT / WebVTT URL").setView(input)
+                        .setPositiveButton("Load") { _, _ -> model.loadSubtitle(Uri.parse(input.text.toString().trim())) }
+                        .setNegativeButton("Cancel", null).show()
+                }
+                else -> {
+                    val (group, index) = tracks[choice - 3]
+                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                        .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index)).build()
+                }
+            }
+        }.setNegativeButton("Cancel", null).show()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -138,7 +198,7 @@ class MainActivity : ComponentActivity() {
                     return true
                 }
                 KeyEvent.KEYCODE_DPAD_UP -> {
-                    if (event.action == KeyEvent.ACTION_DOWN) view.showController()
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) showSubtitles()
                     return true
                 }
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
@@ -166,9 +226,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        activePlayerView = null
-        // Release the decoder and close Media3 reads before stopping the native torrent.
-        model.stop("Stopped while LumaStream is in the background. Open a source to resume.")
+        // A document picker temporarily covers playback; keep the paused session until its result.
+        if (!choosingSubtitle) {
+            activePlayerView = null
+            model.stop("Stopped while LumaStream is in the background. Open a source to resume.")
+        }
         super.onStop()
     }
 }
@@ -197,6 +259,41 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     private var command: Job? = null
     private var heartbeat: Job? = null
     private val configurationStore = CatalogConfigurationStore(application)
+    private var videoSource: MediaSource? = null
+    private var subtitleImport: Job? = null
+
+    fun loadSubtitle(uri: Uri) {
+        val player = screen.value.player ?: return
+        val video = videoSource ?: return
+        subtitleImport?.cancel()
+        subtitleImport = viewModelScope.launch {
+            try {
+                val imported = importSubtitle(getApplication(), uri)
+                if (screen.value.player !== player) return@launch
+                val format = Format.Builder().setSampleMimeType(imported.mimeType)
+                    .setLabel("External subtitles").setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()
+                val subtitle = ProgressiveMediaSource.Factory(
+                    DataSource.Factory { ByteArrayDataSource(imported.bytes) },
+                    ExtractorsFactory {
+                        arrayOf(SubtitleExtractor(DefaultSubtitleParserFactory().create(format), format))
+                    },
+                ).createMediaSource(MediaItem.fromUri("memory://external-subtitle"))
+                val position = player.currentPosition
+                val playing = player.playWhenReady
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setPreferredTextLanguage(null).build()
+                player.setMediaSource(MergingMediaSource(video, subtitle), position)
+                player.prepare()
+                player.playWhenReady = playing
+                mutableScreen.update { it.copy(error = null) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                mutableScreen.update { it.copy(error = "Unable to load subtitles: ${failure.message ?: "unreadable document"}") }
+            }
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -370,10 +467,10 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
             })
-            player.setMediaSource(
-                ProgressiveMediaSource.Factory(playback.dataSourceFactory)
-                    .createMediaSource(MediaItem.fromUri(playback.uri)),
-            )
+            val source = ProgressiveMediaSource.Factory(playback.dataSourceFactory)
+                .createMediaSource(MediaItem.fromUri(playback.uri))
+            videoSource = source
+            player.setMediaSource(source)
             player.prepare()
             player.playWhenReady = true
             heartbeat = viewModelScope.launch {
@@ -422,6 +519,9 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun releasePlayer() {
+        subtitleImport?.cancel()
+        subtitleImport = null
+        videoSource = null
         heartbeat?.cancel()
         heartbeat = null
         val player = screen.value.player
@@ -494,7 +594,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onPlayerViewChanged: (Playe
     }
     val player = screen.player
     if (player != null) {
-        VideoSurface(player, screen.title, torrent, onPlayerViewChanged)
+        VideoSurface(player, screen.title, torrent, screen.error, onPlayerViewChanged)
         return
     }
     val initialFocus = remember { FocusRequester() }
@@ -631,6 +731,7 @@ private fun VideoSurface(
     player: ExoPlayer,
     title: String,
     torrent: TorrentState,
+    subtitleError: String?,
     onPlayerViewChanged: (PlayerView?) -> Unit,
 ) {
     var controlsVisible by remember(player) { mutableStateOf(true) }
@@ -652,6 +753,7 @@ private fun VideoSurface(
                     setShowNextButton(false)
                     setShowRewindButton(true)
                     setShowFastForwardButton(true)
+                    setShowSubtitleButton(true)
                     keepScreenOn = true
                     isFocusable = true
                     descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
@@ -666,14 +768,14 @@ private fun VideoSurface(
                 it.keepScreenOn = false
             },
         )
-        if (controlsVisible || torrent.error != null) {
+        if (controlsVisible || torrent.error != null || subtitleError != null) {
             Column(
                 modifier = Modifier.align(Alignment.TopStart).fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.65f)).padding(horizontal = 30.dp, vertical = 10.dp),
             ) {
                 Text(title, color = Color.White, fontSize = 17.sp, maxLines = 1)
-                Text("${transferLabel(torrent)}  ·  Left/right: seek  ·  OK: pause/play  ·  Down: settings  ·  Back: stop", color = Color(0xFFD3D9E5), fontSize = 12.sp)
-                torrent.error?.let { Text(it, color = Color(0xFFFFA6A6), fontSize = 13.sp) }
+                Text("${transferLabel(torrent)}  ·  Left/right: seek  ·  OK: pause/play  ·  Up: subtitles  ·  Down: settings  ·  Back: stop", color = Color(0xFFD3D9E5), fontSize = 12.sp)
+                (subtitleError ?: torrent.error)?.let { Text(it, color = Color(0xFFFFA6A6), fontSize = 13.sp) }
             }
         }
     }

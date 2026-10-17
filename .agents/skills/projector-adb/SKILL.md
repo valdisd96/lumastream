@@ -67,7 +67,7 @@ Send deliberate keys, then inspect the result instead of firing long blind seque
 | --- | --- |
 | `KEYCODE_DPAD_CENTER` | Pause/resume; select the focused item outside playback |
 | `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | Seek -10 / +30 seconds |
-| `KEYCODE_DPAD_UP` | Show controls |
+| `KEYCODE_DPAD_UP` | Open subtitles (Off, supported tracks, document or HTTPS import) |
 | `KEYCODE_DPAD_DOWN` | Open settings |
 | `KEYCODE_BACK` | Dismiss menu/keyboard first; otherwise stop playback |
 | `KEYCODE_HOME` | Background app; current implementation stops the torrent and cleans the session |

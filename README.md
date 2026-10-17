@@ -11,7 +11,7 @@ An Android TV application for playing torrents before the download completes, in
 - Stop playback and the native session when leaving the application; clean the session cache on stop or when opening another source.
 - Search Internet Archive video items, browse bounded result pages, review creator/source/reported license, and open an item's torrent through the same video-selection flow.
 
-The playback milestone, Internet Archive search and visual TMDB catalog have device verification, including first-frame playback from a catalog-selected torrent source. History, external subtitle loading, and rolling disk-cache eviction are not implemented yet.
+The playback milestone, Internet Archive search and visual TMDB catalog have device verification, including first-frame playback from a catalog-selected torrent source. History and rolling disk-cache eviction are not implemented yet.
 
 ## Visual movie and series catalog
 
@@ -82,11 +82,21 @@ During playback:
 | --- | --- |
 | OK / Enter | Pause or resume |
 | Left / Right | Seek backward 10 seconds / forward 30 seconds |
-| Up | Show playback controls |
+| Up | Open subtitles: Off, supported tracks, external document or HTTPS URL |
 | Down | Open settings, including audio tracks and playback speed |
 | Back | Dismiss an open menu, or stop playback and clear the session |
 
 When editing a link, Back dismisses input focus/keyboard instead of stopping the torrent. If the TV has no document-picker application, use a link or an external file manager that grants URI read access.
+
+### Subtitles
+
+During playback, press **Up** to select a supported embedded subtitle track, turn subtitles **Off**, or load one external **UTF-8 SRT / WebVTT** file. External subtitles can come from a system document picker or a direct HTTPS URL. On the URL screen, use Back to dismiss the keyboard, then Down and OK to activate Load. Loading another external file replaces the previous one; position and play/pause state are retained while the media source prepares again. Document selection pauses playback; resume with OK after returning.
+
+Files are limited to 2 MiB and validated before replacing the current subtitles. HTTPS uses 15-second connection/read timeouts, a bounded read loop, and no redirects: supply the final file URL, not a download page. Import errors appear over the video without intentionally stopping playback. Only the current external file is held in memory; it is discarded when playback stops. The selected HTTPS host receives the subtitle request and network IP.
+
+The projector currently has no system document picker; use HTTPS there, or install a compatible picker. File-picker success has not been device-verified. Embedded support depends on Media3/container support. Automatic subtitle search, torrent-sidecar discovery, subtitle delay adjustment, and persistent subtitle preferences are not implemented.
+
+Device verification on WK03K: build, unit tests and lint passed. Loaded the AndroidX Media project's SRT and WebVTT test fixtures over HTTPS while playing Sintel; screenshots showed actual cues, Off removed the cue, and replacing SRT with WebVTT retained the paused position. A playing SRT import resumed at the pre-import position. An empty import displayed an error and preserved the existing cue. The earlier legacy-decoder failure was reproduced and corrected with `SubtitleExtractor`; the verified build uses extraction-time Media3 cues. Embedded-track playback and successful document-picker return were not independently exercised in this run.
 
 ### Internet Archive search
 
@@ -138,7 +148,7 @@ The final build also exercised an explicit empty-results state, detail-to-result
 
 Use English for all documentation and code comments. Work in task branches; code and related documentation go through PRs into `main`. The only direct initialization commit was empty. PRs report checks actually performed and known limitations. Add tests for meaningful behavior and regressions, not coverage targets; device playback verification remains necessary.
 
-Next product work: bounded rolling storage, history and subtitles. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
+Next product work: bounded rolling storage, history and automatic subtitle discovery. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
 
 ### Resuming in a new agent session
 
