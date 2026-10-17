@@ -95,7 +95,7 @@ Diagnostic logcat tags are `LumaTorrent` and `LumaPlayer`. Logs include bufferin
 
 On 2026-10-17, the ARMv7 JNI library loaded and both Sintel and Big Buck Bunny played through the embedded engine. Big Buck Bunny rendered 1920×1080 H.264 using `OMX.MS.AVC.Decoder`; one measured first frame occurred with 8,126,324 of 276,134,947 video bytes downloaded. A seek from approximately 21 seconds to 3:21 requested missing pieces and returned to `READY` with playback advancing.
 
-Remote pause, forward/backward seeking, settings navigation, and switching from AC-3 5.1 to MP3 stereo were exercised. Sintel magnet metadata was acquired from the network. Invalid torrent input produced a visible error. Screenshots and logcat were used for verification, not mocked playback. Audible output from the physical speakers still needs the owner's confirmation; selecting an audio track is not proof of audible sound.
+Remote pause, forward/backward seeking, settings navigation, and switching from AC-3 5.1 to MP3 stereo were exercised. Sintel magnet metadata was acquired from the network. Invalid torrent input produced a visible error. Screenshots and logcat were used for verification, not mocked playback. The owner confirmed audible playback through the projector's built-in speakers on 2026-10-17. This confirmation applies to the tested playback, not every possible audio codec or track.
 
 ## Development and remaining product work
 
