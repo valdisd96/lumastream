@@ -265,6 +265,7 @@ class TorrentEngine(context: Context) : Closeable {
                             connection.readTimeout = 15_000
                             connection.instanceFollowRedirects = false
                             connection.setRequestProperty("Accept", "application/x-bittorrent, application/octet-stream")
+                            connection.setRequestProperty("User-Agent", "LumaStream/0.1.0 (+https://github.com/valdisd96/lumastream)")
                             val code = connection.responseCode
                             if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
                                 val location = connection.getHeaderField("Location") ?: throw IOException("Torrent redirect has no location")

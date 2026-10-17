@@ -170,6 +170,7 @@ class MainActivity : ComponentActivity() {
 
 data class PlaybackScreenState(
     val input: String = "",
+    val browsingCatalog: Boolean = false,
     val busy: Boolean = false,
     val notice: String? = null,
     val error: String? = null,
@@ -188,6 +189,14 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
     fun setInput(value: String) {
         mutableScreen.update { it.copy(input = value) }
+    }
+
+    fun browseCatalog() {
+        mutableScreen.update { it.copy(browsingCatalog = true) }
+    }
+
+    fun closeCatalog() {
+        mutableScreen.update { it.copy(browsingCatalog = false) }
     }
 
     @Suppress("DEPRECATION")
@@ -217,6 +226,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun open(uri: Uri) {
+        closeCatalog()
         when (uri.scheme?.lowercase(Locale.ROOT)) {
             "magnet", "https", "content", "file" -> Unit
             else -> {
@@ -385,6 +395,13 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 private fun PlaybackScreen(model: PlaybackViewModel, onPlayerViewChanged: (PlayerView?) -> Unit) {
     val screen by model.screen.collectAsState()
     val torrent by model.torrent.collectAsState()
+    if (screen.browsingCatalog) {
+        ArchiveSearchScreen(
+            onOpenTorrent = { model.open(Uri.parse(it)) },
+            onBack = model::closeCatalog,
+        )
+        return
+    }
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val imeVisible = WindowInsets.isImeVisible
@@ -393,9 +410,10 @@ private fun PlaybackScreen(model: PlaybackViewModel, onPlayerViewChanged: (Playe
         if (uri != null) model.open(uri)
     }
     BackHandler(enabled = imeVisible || inputFocused || screen.player != null || screen.busy || torrent.files.isNotEmpty()) {
-        if (imeVisible || inputFocused) {
+        if (screen.player == null && inputFocused) {
             keyboard?.hide()
             focusManager.clearFocus(force = true)
+            inputFocused = false
         } else {
             model.stop("Cancelled and stopped. Open a source to play again.")
         }
@@ -430,6 +448,11 @@ private fun PlaybackScreen(model: PlaybackViewModel, onPlayerViewChanged: (Playe
         item {
             Text("LumaStream", color = Color.White, fontSize = 30.sp)
             Text("Embedded torrent playback · Use only content you are authorized to share.", color = Color(0xFFBCC5D7), fontSize = 14.sp)
+            RemoteButton(
+                "Search Internet Archive",
+                enabled = !screen.busy && torrent.files.isEmpty(),
+                onClick = model::browseCatalog,
+            )
         }
         item {
             OutlinedTextField(
