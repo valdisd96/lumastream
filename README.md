@@ -103,4 +103,10 @@ Use English for all documentation and code comments. Work in task branches; code
 
 Next product work: catalog adapters with permitted programmatic access, parallel search and infohash deduplication, bounded rolling storage, history, and subtitle handling. Specific catalogs remain unselected pending availability/API/terms checks; exhaustive search across all torrents is not promised. Room, DataStore, and additional networking dependencies will be added only when their features need them.
 
+### Resuming in a new agent session
+
+Start the session in the `lumastream` repository and read [AGENTS.md](AGENTS.md). The first playback milestone is complete ([implementation PR #4](https://github.com/valdisd96/lumastream/pull/4), [owner audio confirmation PR #5](https://github.com/valdisd96/lumastream/pull/5), closed [issue #3](https://github.com/valdisd96/lumastream/issues/3)). The next step is checking catalog availability, APIs, and permitted programmatic access before implementing multi-source search.
+
+The project-local [projector-adb skill](.agents/skills/projector-adb/SKILL.md) documents remote device operation and verification. Agents can read it directly; compatible skill-enabled clients discover it from `.agents/skills/` when starting in this repository. Local connection information is kept in ignored `.local/projector-serial`; verify that it still identifies the intended device each session.
+
 Do not commit signing keys, tokens, personal device identifiers, or local network addresses. Use only content you are authorized to obtain and distribute. BitTorrent may upload to peers, who can see the network IP address; uninterrupted playback is not guaranteed.
