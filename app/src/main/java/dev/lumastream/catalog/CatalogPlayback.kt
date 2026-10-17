@@ -10,12 +10,17 @@ private val YEAR_MARKER = Regex("(?<!\\d)(19\\d{2}|20\\d{2})(?!\\d)")
 private val TITLE_SEPARATORS = Regex("[^\\p{L}\\p{N}]+")
 private val INFO_HASH = Regex("[0-9a-fA-F]{40}")
 private val TRACKER_SCHEMES = setOf("https", "http", "udp")
+private val DEFAULT_TRACKERS = listOf(
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+)
 
 fun catalogMagnet(source: CatalogSource): Uri {
     require(INFO_HASH.matches(source.infoHash)) { "The provider returned an invalid torrent hash." }
     val builder = Uri.Builder().scheme("magnet")
-        .appendQueryParameter("xt", "urn:btih:${source.infoHash.lowercase(Locale.ROOT)}")
-    for (tracker in source.trackers.distinct().take(16)) {
+        .encodedQuery("xt=urn:btih:${source.infoHash.lowercase(Locale.ROOT)}")
+    // Some providers return only a hash; DHT alone may not discover their swarm.
+    for (tracker in source.trackers.ifEmpty { DEFAULT_TRACKERS }.distinct().take(16)) {
         val uri = Uri.parse(tracker)
         if (uri.scheme in TRACKER_SCHEMES && !uri.host.isNullOrBlank() &&
             tracker.length <= 2048 && tracker.none { it.isISOControl() }) {
