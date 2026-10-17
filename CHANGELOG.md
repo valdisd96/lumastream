@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added a visual TMDB movie/series catalog, separate Stremio torrent-source flow, private configuration, bounded artwork caching and TMDB attribution. Credentialed catalog and end-to-end device verification remain pending.
+- Added strict selected-file checks and seven regression tests for episode identity, ambiguous files, conflicting provider metadata, remake years and non-contiguous torrent indexes.
 - Documented LumaStream's purpose, target device, technical direction, and pull-request workflow.
 - Standardized project documentation and code comments on English; translated the existing README and changelog.
 - Added an installable ARMv7 Android TV debug APK with an embedded libtorrent4j engine and Media3 playback.

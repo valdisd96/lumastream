@@ -74,6 +74,11 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import dev.lumastream.torrent.TorrentEngine
 import dev.lumastream.torrent.TorrentState
+import dev.lumastream.catalog.CatalogConfiguration
+import dev.lumastream.catalog.CatalogConfigurationStore
+import dev.lumastream.catalog.CatalogSelection
+import dev.lumastream.catalog.catalogMagnet
+import dev.lumastream.catalog.selectCatalogFile
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -168,9 +173,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+enum class AppPage { CATALOG, ARCHIVE, SETTINGS, PLAYER }
+
 data class PlaybackScreenState(
     val input: String = "",
-    val browsingCatalog: Boolean = false,
+    val page: AppPage = AppPage.CATALOG,
+    val configuration: CatalogConfiguration = CatalogConfiguration(),
+    val configurationSaving: Boolean = false,
+    val configurationError: String? = null,
     val busy: Boolean = false,
     val notice: String? = null,
     val error: String? = null,
@@ -186,17 +196,56 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     val screen = mutableScreen.asStateFlow()
     private var command: Job? = null
     private var heartbeat: Job? = null
+    private val configurationStore = CatalogConfigurationStore(application)
+
+    init {
+        viewModelScope.launch {
+            try {
+                val configuration = configurationStore.load()
+                mutableScreen.update { it.copy(configuration = configuration) }
+            } catch (_: Exception) {
+                mutableScreen.update { it.copy(configurationError = "Unable to read catalog settings. Save them again.") }
+            }
+        }
+    }
 
     fun setInput(value: String) {
         mutableScreen.update { it.copy(input = value) }
     }
 
-    fun browseCatalog() {
-        mutableScreen.update { it.copy(browsingCatalog = true) }
+    fun navigate(page: AppPage) {
+        mutableScreen.update { it.copy(page = page) }
     }
 
-    fun closeCatalog() {
-        mutableScreen.update { it.copy(browsingCatalog = false) }
+    fun saveConfiguration(configuration: CatalogConfiguration) {
+        if (screen.value.configurationSaving) return
+        mutableScreen.update { it.copy(configurationSaving = true, configurationError = null) }
+        viewModelScope.launch {
+            try {
+                val saved = configurationStore.save(configuration)
+                mutableScreen.update { it.copy(configuration = saved, page = AppPage.CATALOG) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                mutableScreen.update { it.copy(configurationError = failure.message ?: "Unable to save catalog settings.") }
+            } finally {
+                mutableScreen.update { it.copy(configurationSaving = false) }
+            }
+        }
+    }
+
+    fun openCatalog(selection: CatalogSelection) {
+        navigate(AppPage.PLAYER)
+        releasePlayer()
+        runCommand {
+            val magnet = catalogMagnet(selection.source)
+            mutableScreen.update {
+                it.copy(input = magnet.toString(), busy = true, error = null, notice = "Opening selected source…", title = "")
+            }
+            engine.open(magnet)
+            val selected = selectCatalogFile(selection, engine.state.value.files)
+            startVideo(selected.index)
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -226,7 +275,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun open(uri: Uri) {
-        closeCatalog()
+        navigate(AppPage.PLAYER)
         when (uri.scheme?.lowercase(Locale.ROOT)) {
             "magnet", "https", "content", "file" -> Unit
             else -> {
@@ -248,7 +297,10 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
     fun select(index: Int) {
         releasePlayer()
-        runCommand {
+        runCommand { startVideo(index) }
+    }
+
+    private suspend fun startVideo(index: Int) {
             mutableScreen.update { it.copy(busy = true, error = null, notice = "Preparing video…") }
             val playback = engine.select(index)
             val player = ExoPlayer.Builder(getApplication<Application>())
@@ -332,7 +384,6 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                     delay(10_000)
                 }
             }
-        }
     }
 
     fun stop(notice: String = "Stopped. Open a source to play again.", error: String? = null) {
@@ -395,12 +446,35 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 private fun PlaybackScreen(model: PlaybackViewModel, onPlayerViewChanged: (PlayerView?) -> Unit) {
     val screen by model.screen.collectAsState()
     val torrent by model.torrent.collectAsState()
-    if (screen.browsingCatalog) {
-        ArchiveSearchScreen(
-            onOpenTorrent = { model.open(Uri.parse(it)) },
-            onBack = model::closeCatalog,
-        )
-        return
+    when (screen.page) {
+        AppPage.CATALOG -> {
+            MovieCatalogScreen(
+                configuration = screen.configuration,
+                onConfigure = { model.navigate(AppPage.SETTINGS) },
+                onArchive = { model.navigate(AppPage.ARCHIVE) },
+                onBack = { model.navigate(AppPage.PLAYER) },
+                onOpenSource = model::openCatalog,
+            )
+            return
+        }
+        AppPage.ARCHIVE -> {
+            ArchiveSearchScreen(
+                onOpenTorrent = { model.open(Uri.parse(it)) },
+                onBack = { model.navigate(AppPage.CATALOG) },
+            )
+            return
+        }
+        AppPage.SETTINGS -> {
+            CatalogSettingsScreen(
+                configuration = screen.configuration,
+                saving = screen.configurationSaving,
+                error = screen.configurationError,
+                onSave = model::saveConfiguration,
+                onBack = { model.navigate(AppPage.CATALOG) },
+            )
+            return
+        }
+        AppPage.PLAYER -> Unit
     }
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -448,11 +522,17 @@ private fun PlaybackScreen(model: PlaybackViewModel, onPlayerViewChanged: (Playe
         item {
             Text("LumaStream", color = Color.White, fontSize = 30.sp)
             Text("Embedded torrent playback · Use only content you are authorized to share.", color = Color(0xFFBCC5D7), fontSize = 14.sp)
-            RemoteButton(
-                "Search Internet Archive",
-                enabled = !screen.busy && torrent.files.isEmpty(),
-                onClick = model::browseCatalog,
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                RemoteButton("Movies and series", enabled = !screen.busy && torrent.files.isEmpty()) {
+                    model.navigate(AppPage.CATALOG)
+                }
+                RemoteButton("Archive", enabled = !screen.busy && torrent.files.isEmpty()) {
+                    model.navigate(AppPage.ARCHIVE)
+                }
+                RemoteButton("Catalog settings", enabled = !screen.busy && torrent.files.isEmpty()) {
+                    model.navigate(AppPage.SETTINGS)
+                }
+            }
         }
         item {
             OutlinedTextField(

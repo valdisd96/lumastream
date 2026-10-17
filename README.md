@@ -11,7 +11,21 @@ An Android TV application for playing torrents before the download completes, in
 - Stop playback and the native session when leaving the application; clean the session cache on stop or when opening another source.
 - Search Internet Archive video items, browse bounded result pages, review creator/source/reported license, and open an item's torrent through the same video-selection flow.
 
-The first playback milestone and single-source Internet Archive search are implemented. Multi-source search, history, external subtitle loading, and rolling disk-cache eviction are not implemented yet.
+The playback milestone and Internet Archive search have device verification. The visual TMDB catalog and Stremio torrent-source integration are implemented on the visual-catalog branch but still require credentialed end-to-end verification. History, external subtitle loading, and rolling disk-cache eviction are not implemented yet.
+
+## Visual movie and series catalog
+
+The initial screen separates movie/series metadata from torrent availability. Configure a personal **TMDB API Read Access Token** in Settings; this is the read token, not the shorter API key. Obtain it through your [TMDB API account settings](https://www.themoviedb.org/settings/api). Do not commit or paste credentials into issues. Settings are stored in app-private `files/catalog-config.json`; Android backup is disabled. The token is not bundled in the APK.
+
+Search supports All / Movies / Series, poster cards, year and media type. Details show available artwork, descriptions, seasons and episodes. Source requests use the selected title's IMDb ID and, for series, its season and episode. Archive remains a separate navigation destination, not a fallback mixed into TMDB results.
+
+Settings accept an HTTPS Stremio `/manifest.json` URL. The current default is Torrentio; its live responses were inspected for Sintel and Big Buck Bunny, but playback through this integration has not yet been verified. Only torrent `infoHash` streams are supported; HTTP video, debrid, DRM and external-player streams are not. Provider availability and permission to obtain each work are separate concerns. Metadata access is not permission to download a work.
+
+Sources display provider-reported quality, languages, size and seeders only when available. Identity checks precede selection; duplicates are combined by hash and selected file. Actual torrent file metadata is checked before playback: contradictory filename/year/episode information or ambiguous episode files produce an error rather than selecting the largest video.
+
+Artwork uses bounded sizes and a shared 16 MiB memory / 64 MiB disk cache. Text remains available when images fail. Settings include the official TMDB logo and required non-endorsement attribution. Review [TMDB usage requirements](https://developer.themoviedb.org/docs/faq) before distribution; commercial use requires separate agreement.
+
+Verification for this branch: `assembleDebug`, `testDebugUnitTest` and `lintDebug` passed. Seven file-selection regression tests cover episode selection, ambiguity, contradictory metadata and torrent-index handling. The APK was installed on WK03K and its missing-token screen was observed. Real TMDB results, image rendering, series navigation and source-to-playback acceptance remain blocked on an owner-provided read token; these are not claimed as verified.
 
 ## Target device and stack
 
@@ -116,7 +130,7 @@ The final build also exercised an explicit empty-results state, detail-to-result
 
 Use English for all documentation and code comments. Work in task branches; code and related documentation go through PRs into `main`. The only direct initialization commit was empty. PRs report checks actually performed and known limitations. Add tests for meaningful behavior and regressions, not coverage targets; device playback verification remains necessary.
 
-Next product work: a second catalog with verified API access and terms, parallel search and infohash deduplication, bounded rolling storage, history, and subtitle handling. Internet Archive is the only implemented catalog; exhaustive search across all torrents is not promised. Room, DataStore, and additional networking dependencies will be added only when their features need them.
+Next: supply the TMDB read token and complete real-device catalog-to-source-to-playback checks, including Interstellar and The Studio title identity, poster rendering and remote navigation. Then address bounded rolling storage, history and subtitles. Exhaustive search across all torrents is not promised.
 
 ### Resuming in a new agent session
 
