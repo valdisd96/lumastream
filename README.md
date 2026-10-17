@@ -9,8 +9,9 @@ An Android TV application for playing torrents before the download completes, in
 - Play through Media3, pause, seek into undownloaded sections, and choose available audio tracks through the player settings.
 - Display download progress, peers, buffering, and actionable input/network/storage errors.
 - Stop playback and the native session when leaving the application; clean the session cache on stop or when opening another source.
+- Search Internet Archive video items, browse bounded result pages, review creator/source/reported license, and open an item's torrent through the same video-selection flow.
 
-This implements the first device-validation milestone. Catalog search, history, external subtitle loading, and rolling disk-cache eviction are not implemented yet. There are no search controls pretending otherwise.
+The first playback milestone and single-source Internet Archive search are implemented. Multi-source search, history, external subtitle loading, and rolling disk-cache eviction are not implemented yet.
 
 ## Target device and stack
 
@@ -65,6 +66,16 @@ During playback:
 
 When editing a link, Back dismisses input focus/keyboard instead of stopping the torrent. If the TV has no document-picker application, use a link or an external file manager that grants URI read access.
 
+### Internet Archive search
+
+With no torrent session open, choose **Search Internet Archive**, then **Edit query** to open the keyboard with the remote. Enter a title or creator and submit the keyboard search action or choose **Search**. **Previous page** / **Next page** replace the current page; at most 20 result entries are retained. Select a result to review its creator, source URL, and reported license, then choose **Open torrent** and select a video.
+
+Back dismisses query editing first, returns from details to the selected result, or leaves search. Leaving search, backgrounding the app, or editing the query cancels outstanding catalog requests. Search results survive returning from details or reopening search within the same activity; they are not persistent history.
+
+Search uses a literal phrase, not user-supplied search operators. Queries are limited to 200 characters and API responses to 2 MiB; requests have a 30-second deadline and 15-second socket timeouts. Rate-limit responses surface a cooldown rather than automatic retries. Only the current page is retained, so browsing does not grow an unbounded list.
+
+Catalog results are not promises of torrent availability: missing, restricted, oversized, and unreachable sources produce errors. Source and reported license URLs are displayed as text. Internet Archive does not guarantee uploaded rights declarations; verify permission before downloading or sharing. See its [API documentation](https://archive.org/developers/index-apis.html), [automated-access guidance](https://archive.org/developers/bots.html), [rights guidance](https://archivesupport.zendesk.com/hc/en-us/articles/360014759692-Rights), and [terms](https://archive.org/about/terms). The current terms page's body did not load during this session; full terms review remains a release prerequisite, not implied legal clearance.
+
 Example external opening:
 
 ```sh
@@ -97,15 +108,19 @@ On 2026-10-17, the ARMv7 JNI library loaded and both Sintel and Big Buck Bunny p
 
 Remote pause, forward/backward seeking, settings navigation, and switching from AC-3 5.1 to MP3 stereo were exercised. Sintel magnet metadata was acquired from the network. Invalid torrent input produced a visible error. Screenshots and logcat were used for verification, not mocked playback. The owner confirmed audible playback through the projector's built-in speakers on 2026-10-17. This confirmation applies to the tested playback, not every possible audio codec or track.
 
+Internet Archive search was also exercised on WK03K: query entry using the remote, real result pagination, details/source/license disclosure, and a visible restricted-item error. Searching for Sintel and selecting `https://archive.org/details/Sintel` resolved its torrent and exposed four playable video files. `Sintel/sintel-2048-stereo.mp4` rendered 2048×872 H.264 with an AAC stereo track; the first frame was logged with 6,914,557 of 282,690,045 video bytes downloaded, followed by advancing playback positions. This is a separate source from the original WebTorrent sample; audible output was not independently reconfirmed for this run.
+
+The final build also exercised an explicit empty-results state, detail-to-result and search-to-player Back navigation, repeated catalog playback, playback stop via Back, and direct external WebTorrent input. On the repeated Archive run the first frame arrived with 3,768,829 bytes downloaded; normal Back released the player and stopped the native session, leaving 8 KiB in the app cache. Backgrounding during source opening returned to the stopped state. No forced rate-limit or offline-network fault was injected, and no fresh claim of audible output is made.
+
 ## Development and remaining product work
 
 Use English for all documentation and code comments. Work in task branches; code and related documentation go through PRs into `main`. The only direct initialization commit was empty. PRs report checks actually performed and known limitations. Add tests for meaningful behavior and regressions, not coverage targets; device playback verification remains necessary.
 
-Next product work: catalog adapters with permitted programmatic access, parallel search and infohash deduplication, bounded rolling storage, history, and subtitle handling. Specific catalogs remain unselected pending availability/API/terms checks; exhaustive search across all torrents is not promised. Room, DataStore, and additional networking dependencies will be added only when their features need them.
+Next product work: a second catalog with verified API access and terms, parallel search and infohash deduplication, bounded rolling storage, history, and subtitle handling. Internet Archive is the only implemented catalog; exhaustive search across all torrents is not promised. Room, DataStore, and additional networking dependencies will be added only when their features need them.
 
 ### Resuming in a new agent session
 
-Start the session in the `lumastream` repository and read [AGENTS.md](AGENTS.md). The first playback milestone is complete ([implementation PR #4](https://github.com/valdisd96/lumastream/pull/4), [owner audio confirmation PR #5](https://github.com/valdisd96/lumastream/pull/5), closed [issue #3](https://github.com/valdisd96/lumastream/issues/3)). The next step is checking catalog availability, APIs, and permitted programmatic access before implementing multi-source search.
+Start the session in the `lumastream` repository and read [AGENTS.md](AGENTS.md). The first playback milestone is complete ([implementation PR #4](https://github.com/valdisd96/lumastream/pull/4), [owner audio confirmation PR #5](https://github.com/valdisd96/lumastream/pull/5), closed [issue #3](https://github.com/valdisd96/lumastream/issues/3)). Internet Archive search implements [issue #7](https://github.com/valdisd96/lumastream/issues/7); check current PR status before continuing. Additional catalogs still require availability/API/terms checks.
 
 The project-local [projector-adb skill](.agents/skills/projector-adb/SKILL.md) documents remote device operation and verification. Agents can read it directly; compatible skill-enabled clients discover it from `.agents/skills/` when starting in this repository. Local connection information is kept in ignored `.local/projector-serial`; verify that it still identifies the intended device each session.
 
