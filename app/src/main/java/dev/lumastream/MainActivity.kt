@@ -87,6 +87,12 @@ import androidx.media3.common.Format
 import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.text.DefaultSubtitleParserFactory
 import androidx.media3.extractor.text.SubtitleExtractor
+import dev.lumastream.history.WatchEntry
+import dev.lumastream.history.WatchHistoryStore
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 
 private const val PLAYER_TAG = "LumaPlayer"
 
@@ -306,6 +312,10 @@ data class PlaybackScreenState(
     val error: String? = null,
     val title: String = "",
     val player: ExoPlayer? = null,
+    val history: List<WatchEntry> = emptyList(),
+    val historyError: String? = null,
+    val resumeSelection: CatalogSelection? = null,
+    val resumeEntry: WatchEntry? = null,
 )
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -319,6 +329,55 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     private val configurationStore = CatalogConfigurationStore(application)
     private var videoSource: MediaSource? = null
     private var subtitleImport: Job? = null
+    private val historyStore = WatchHistoryStore(application)
+    private val historyReady = CompletableDeferred<Unit>()
+    private val historyWrites = Channel<List<WatchEntry>>(Channel.CONFLATED)
+    private var historyWritable = false
+    private var activeSelection: CatalogSelection? = null
+    private var renderedVideo = false
+
+    private fun saveProgress() {
+        val player = screen.value.player ?: return
+        val selection = activeSelection ?: return
+        // Failed preparation must not replace a previously usable resume point.
+        if (!renderedVideo || !historyWritable) return
+        val entry = WatchEntry(
+            selection, player.currentPosition.coerceAtLeast(0),
+            player.duration.coerceAtLeast(0), System.currentTimeMillis(),
+            player.playbackState == Player.STATE_ENDED,
+        )
+        val entries = (listOf(entry) + screen.value.history.filterNot { it.key == entry.key }).take(100)
+        mutableScreen.update { it.copy(history = entries) }
+        historyWrites.trySend(entries)
+    }
+
+    fun requestCatalog(selection: CatalogSelection) {
+        viewModelScope.launch {
+            historyReady.await()
+            val key = WatchEntry(selection, 0, 0, 0, false).key
+            val previous = screen.value.history.firstOrNull { it.key == key }
+            if (previous != null) {
+                mutableScreen.update { it.copy(resumeSelection = selection, resumeEntry = previous) }
+            } else {
+                openCatalog(selection)
+            }
+        }
+    }
+
+    fun dismissResume() {
+        mutableScreen.update { it.copy(resumeSelection = null, resumeEntry = null) }
+    }
+
+    fun confirmResume(startOver: Boolean) {
+        val selection = screen.value.resumeSelection ?: return
+        val entry = screen.value.resumeEntry ?: return
+        dismissResume()
+        openCatalog(selection, if (startOver || entry.completed) 0 else entry.positionMs)
+    }
+
+    fun resume(entry: WatchEntry, startOver: Boolean) {
+        openCatalog(entry.selection, if (startOver || entry.completed) 0 else entry.positionMs)
+    }
 
     fun loadSubtitle(uri: Uri) {
         val player = screen.value.player ?: return
@@ -354,6 +413,30 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     init {
+        // This writer drains the final snapshot even after ViewModel cancellation.
+        CoroutineScope(Dispatchers.IO).launch {
+            for (entries in historyWrites) {
+                try {
+                    historyStore.save(entries)
+                    mutableScreen.update { it.copy(historyError = null) }
+                } catch (_: Exception) {
+                    mutableScreen.update { it.copy(historyError = "Unable to save watch history. Your latest position may not survive closing the app.") }
+                }
+            }
+        }
+        viewModelScope.launch {
+            try {
+                val entries = historyStore.load()
+                mutableScreen.update { it.copy(history = entries) }
+                historyWritable = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                mutableScreen.update { it.copy(historyError = "Unable to read watch history. Existing history has not been overwritten.") }
+            } finally {
+                historyReady.complete(Unit)
+            }
+        }
         viewModelScope.launch {
             try {
                 val configuration = configurationStore.load()
@@ -385,17 +468,19 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun openCatalog(selection: CatalogSelection) {
+    private fun openCatalog(selection: CatalogSelection, positionMs: Long = 0) {
         navigate(AppPage.PLAYER)
         releasePlayer()
         runCommand {
+            historyReady.await()
             val magnet = catalogMagnet(selection.source)
             mutableScreen.update {
                 it.copy(busy = true, error = null, notice = "Opening selected source…", title = "")
             }
             engine.open(magnet)
             val selected = selectCatalogFile(selection, engine.state.value.files)
-            startVideo(selected.index)
+            val resolved = selection.copy(source = selection.source.copy(fileIndex = selected.index, filename = selected.name))
+            startVideo(selected.index, resolved, positionMs)
         }
     }
 
@@ -441,9 +526,11 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         runCommand { startVideo(index) }
     }
 
-    private suspend fun startVideo(index: Int) {
+    private suspend fun startVideo(index: Int, selection: CatalogSelection? = null, positionMs: Long = 0) {
             mutableScreen.update { it.copy(busy = true, error = null, notice = "Preparing video…") }
             val playback = engine.select(index)
+            activeSelection = selection
+            renderedVideo = false
             val player = ExoPlayer.Builder(getApplication<Application>())
                 .setLoadControl(
                     DefaultLoadControl.Builder()
@@ -472,6 +559,8 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 override fun onRenderedFirstFrame() {
+                    renderedVideo = true
+                    saveProgress()
                     val transfer = engine.state.value
                     Log.i(PLAYER_TAG, "first_frame title=${playback.title} positionMs=${player.currentPosition} downloadedBytes=${transfer.downloadedBytes} totalBytes=${transfer.totalBytes}")
                 }
@@ -493,6 +582,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     Log.i(PLAYER_TAG, "isPlaying=$isPlaying positionMs=${player.currentPosition}")
+                    if (!isPlaying) saveProgress()
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -508,19 +598,21 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                     if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) {
                         val transfer = engine.state.value
                         Log.i(PLAYER_TAG, "seek fromMs=${oldPosition.positionMs} toMs=${newPosition.positionMs} reason=$reason downloadedBytes=${transfer.downloadedBytes} totalBytes=${transfer.totalBytes}")
+                        saveProgress()
                     }
                 }
             })
             val source = ProgressiveMediaSource.Factory(playback.dataSourceFactory)
                 .createMediaSource(MediaItem.fromUri(playback.uri))
             videoSource = source
-            player.setMediaSource(source)
+            player.setMediaSource(source, positionMs)
             player.prepare()
             player.playWhenReady = true
             heartbeat = viewModelScope.launch {
                 while (isActive) {
                     if (player.isPlaying) {
                         Log.i(PLAYER_TAG, "playing positionMs=${player.currentPosition} bufferedMs=${player.bufferedPosition} durationMs=${player.duration}")
+                        saveProgress()
                     }
                     delay(10_000)
                 }
@@ -563,6 +655,9 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun releasePlayer() {
+        saveProgress()
+        activeSelection = null
+        renderedVideo = false
         subtitleImport?.cancel()
         subtitleImport = null
         videoSource = null
@@ -580,6 +675,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         command?.cancel()
         releasePlayer()
         engine.close()
+        historyWrites.close()
         super.onCleared()
     }
 }
@@ -596,8 +692,44 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                 onConfigure = { model.navigate(AppPage.SETTINGS) },
                 onArchive = { model.navigate(AppPage.ARCHIVE) },
                 onBack = onExit,
-                onOpenSource = model::openCatalog,
+                onOpenSource = model::requestCatalog,
+                history = screen.history,
+                historyError = screen.historyError,
+                onResume = model::resume,
             )
+            val entry = screen.resumeEntry
+            val selection = screen.resumeSelection
+            if (entry != null && selection != null) {
+                androidx.compose.ui.window.Dialog(onDismissRequest = model::dismissResume) {
+                    Column(
+                        Modifier.background(Color(0xFF192535)).padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Text(selection.details.title.title, color = Color.White, fontSize = 24.sp)
+                        val changedSource = !entry.selection.source.infoHash.equals(selection.source.infoHash, ignoreCase = true) ||
+                            entry.selection.source.fileIndex != selection.source.fileIndex
+                        Text(
+                            if (changedSource) "Different source selected. Its cut or timing may differ. Transfer the saved position explicitly, or start from the beginning."
+                            else if (entry.completed) "You finished this video."
+                            else "Continue from ${entry.positionMs / 60_000}:${(entry.positionMs / 1000 % 60).toString().padStart(2, '0')}?",
+                            color = Color.White,
+                        )
+                        val initialFocus = remember { FocusRequester() }
+                        if (!entry.completed) RemoteButton(
+                            if (changedSource) "Transfer saved position" else "Continue",
+                            Modifier.focusRequester(initialFocus),
+                        ) { model.confirmResume(false) }
+                        RemoteButton("Start from beginning",
+                            if (entry.completed) Modifier.focusRequester(initialFocus) else Modifier,
+                        ) { model.confirmResume(true) }
+                        RemoteButton("Cancel") { model.dismissResume() }
+                        LaunchedEffect(entry.key) {
+                            withFrameNanos { }
+                            initialFocus.requestFocus()
+                        }
+                    }
+                }
+            }
             return
         }
         AppPage.ARCHIVE -> {

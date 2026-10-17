@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added persistent catalog watch history and Home cards for watched movies and the latest episode of each series, with saved position, duration, progress and completed status.
+- Added direct resume of the saved torrent/file, restart and exact-title/episode source replacement with explicit position transfer; history survives app recreation without retaining video cache.
 - Added a persisted catalog-language selector with English as the default, including migration of existing settings; all TMDB search/detail/episode requests use the selected language independently of query text.
 - Replaced the manual torrent-input screen with a search-first Home, clearer search/filter controls and consistent poster cards. Removed the Sintel demo button and editable torrent URLs while retaining external file-manager intents.
 - Fixed Back navigation: nested screens return through the catalog, playback Back stops the session, and Back on Home closes the activity/task instead of opening the old input screen.
@@ -19,7 +21,7 @@
 - Added remote pause/resume, backward/forward seeking, audio/settings access, and automatic file focus; fixed keyboard dismissal and native-player key routing on the projector.
 - Verified real 1080p playback before full download, seeking to missing pieces, magnet metadata acquisition, audio-track switching, invalid-input handling, and background cache cleanup on WK03K. The owner confirmed audible playback through the built-in speakers on 2026-10-17.
 - Added a pinned Gradle wrapper, Android build/lint CI with explicit SDK packages and APK artifacts, and bundled native dependency notices.
-- Multi-source search, history, automatic subtitle discovery, and the proposed rolling disk cache remain planned product work.
+- Multi-source search, automatic subtitle discovery, and the proposed rolling disk cache remain planned product work.
 - Added a new-session agent entry point and a project-local `projector-adb` skill covering device connection, remote controls, playback evidence, and cleanup. Added a screenshot helper verified on WK03K that strips firmware text preceding PNG data; local device details and captures are excluded from Git.
 - Added Internet Archive video search with remote query entry, bounded pagination, creator/source/license details, real metadata-to-torrent opening, cancellation, and visible availability/network errors. Added bounded HTTPS JSON reads, literal query escaping, and rate-limit cooldown handling.
 - Verified catalog-to-player Sintel playback on WK03K before full download, result pagination, and restricted-item handling. Added explicit remote query editing and prevented stale keyboard state from trapping Back on details or playback.

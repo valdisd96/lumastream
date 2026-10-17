@@ -42,4 +42,5 @@ dependencies {
     implementation("org.libtorrent4j:libtorrent4j:2.1.0-39")
     implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-39")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
