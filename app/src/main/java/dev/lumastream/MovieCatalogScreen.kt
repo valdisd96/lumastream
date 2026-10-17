@@ -9,10 +9,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +29,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -45,8 +48,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -117,7 +122,7 @@ private class MovieCatalogViewModel : ViewModel() {
         if (configuration == value) return
         cancel()
         configuration = value
-        catalog = value.token.takeIf { it.isNotBlank() }?.let(::TmdbCatalog)
+        catalog = value.token.takeIf { it.isNotBlank() }?.let { TmdbCatalog(it, value.catalogLanguage) }
         provider = StremioSources(value.providerManifestUrl)
         mutableState.value = MovieCatalogState(focusEpoch = state.value.focusEpoch + 1)
     }
@@ -291,10 +296,15 @@ fun MovieCatalogScreen(
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
     val backFocus = remember { FocusRequester() }
+    val searchFocus = remember { FocusRequester() }
     val queryFocus = remember { FocusRequester() }
     val resultsScroll = rememberLazyGridState()
-    var inputFocused by remember { mutableStateOf(false) }
+    var editingQuery by remember { mutableStateOf(false) }
+    var keyboardWasVisible by remember { mutableStateOf(false) }
+    var homeFocusPending by remember { mutableStateOf(true) }
     var pendingResultFocus by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(model, lifecycle, configuration) {
@@ -317,13 +327,13 @@ fun MovieCatalogScreen(
     fun dismissInput() {
         keyboard?.hide()
         focusManager.clearFocus(force = true)
-        inputFocused = false
+        editingQuery = false
     }
 
     fun goBack() {
-        if (inputFocused) {
+        if (editingQuery) {
             dismissInput()
-            backFocus.requestFocus()
+            homeFocusPending = true
         } else if (!model.back()) {
             model.deactivate()
             onBack()
@@ -337,121 +347,221 @@ fun MovieCatalogScreen(
     }
 
     BackHandler(onBack = ::goBack)
+    LaunchedEffect(editingQuery, imeVisible) {
+        if (!editingQuery) {
+            keyboardWasVisible = false
+        } else if (imeVisible) {
+            keyboardWasVisible = true
+        } else if (keyboardWasVisible) {
+            dismissInput()
+            homeFocusPending = true
+        }
+    }
 
     LaunchedEffect(state.route, state.focusEpoch) {
         dismissInput()
         pendingResultFocus = null
+        homeFocusPending = state.route == CatalogRoute.RESULTS && state.titles.isEmpty()
         if (state.route == CatalogRoute.RESULTS && state.titles.isNotEmpty()) {
             val index = state.titles.indexOfFirst { it.id == state.selected?.id && it.kind == state.selected?.kind }
                 .coerceAtLeast(0)
             resultsScroll.scrollToItem(index)
             pendingResultFocus = state.titles[index].identity()
-        } else {
-            withFrameNanos { }
-            backFocus.requestFocus()
         }
     }
 
+    fun search() {
+        dismissInput()
+        homeFocusPending = true
+        model.search()
+    }
+
     Column(
-        Modifier.fillMaxSize().background(CatalogBackground).padding(horizontal = 32.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        Modifier.fillMaxSize()
+            .background(Brush.verticalGradient(listOf(Color(0xFF1A263A), CatalogBackground, Color(0xFF0C1018))))
+            .padding(horizontal = 32.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            CatalogButton(
-                when (state.route) {
-                    CatalogRoute.RESULTS -> "Home"
-                    CatalogRoute.DETAILS -> "Back to results"
-                    CatalogRoute.EPISODES -> "Back to seasons"
-                    CatalogRoute.SOURCES -> if (state.episode == null) "Back to details" else "Back to episodes"
-                },
-                Modifier.focusRequester(backFocus), onClick = ::goBack,
-            )
-            Text("Movies & series", color = Color.White, fontSize = 24.sp, modifier = Modifier.weight(1f))
-            CatalogButton("Archive (separate)") { leave(onArchive) }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (state.route != CatalogRoute.RESULTS) {
+                CatalogButton(
+                    when (state.route) {
+                        CatalogRoute.RESULTS, CatalogRoute.DETAILS -> "Back to results"
+                        CatalogRoute.EPISODES -> "Back to seasons"
+                        CatalogRoute.SOURCES -> if (state.episode == null) "Back to details" else "Back to episodes"
+                    },
+                    Modifier.focusRequester(backFocus), onClick = ::goBack,
+                )
+                LaunchedEffect(state.route, state.focusEpoch) {
+                    withFrameNanos { }
+                    backFocus.requestFocus()
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("LumaStream", color = Color.White, fontSize = 25.sp)
+                Text("MOVIES & SERIES", color = CatalogAccent, fontSize = 10.sp, letterSpacing = 2.sp)
+            }
+            CatalogButton("Archive") { leave(onArchive) }
             CatalogButton("Settings") { leave(onConfigure) }
         }
-        if (configuration.token.isBlank()) {
-            CatalogReadable("Connect TMDB to search real movie and series metadata. Torrent sources are requested separately, only after you select a title or episode.")
-            CatalogButton("Configure TMDB") { leave(onConfigure) }
-        } else {
-            when (state.route) {
-                CatalogRoute.RESULTS -> {
-                    OutlinedTextField(
-                        value = state.query,
-                        onValueChange = model::setQuery,
-                        modifier = Modifier.fillMaxWidth().focusRequester(queryFocus).onFocusChanged { inputFocused = it.isFocused },
-                        label = { Text("Search movies and series") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = {
-                            dismissInput()
-                            backFocus.requestFocus()
-                            model.search()
-                        }),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CatalogButton("Edit query") { queryFocus.requestFocus(); keyboard?.show() }
-                        CatalogButton("Search", enabled = state.query.isNotBlank()) {
-                            dismissInput()
-                            backFocus.requestFocus()
-                            model.search()
+        when (state.route) {
+            CatalogRoute.RESULTS -> {
+                val welcoming = !state.searched && !state.loading && state.error == null
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Brush.horizontalGradient(listOf(Color(0xFF263B57), Color(0xFF192535))))
+                        .padding(horizontal = 24.dp, vertical = if (welcoming) 26.dp else 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    if (welcoming) {
+                        Text("What will you watch?", color = Color.White, fontSize = 32.sp)
+                        Text("Find your next movie or series.", color = CatalogMuted, fontSize = 16.sp)
+                    }
+                    if (editingQuery) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = state.query,
+                                onValueChange = model::setQuery,
+                                modifier = Modifier.weight(1f).focusRequester(queryFocus),
+                                label = { Text("Search movies and series") },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White,
+                                    cursorColor = CatalogAccent,
+                                    focusedBorderColor = CatalogAccent,
+                                    unfocusedBorderColor = CatalogMuted,
+                                    focusedLabelColor = CatalogAccent,
+                                    unfocusedLabelColor = CatalogMuted,
+                                ),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(onSearch = { search() }),
+                            )
+                            CatalogButton("Search", enabled = state.query.isNotBlank(), onClick = ::search)
                         }
-                        CatalogFilter.entries.forEach { filter ->
-                            CatalogButton(
-                                (if (state.filter == filter) "Selected: " else "") + when (filter) {
-                                    CatalogFilter.ALL -> "All"
-                                    CatalogFilter.MOVIES -> "Movies"
-                                    CatalogFilter.SERIES -> "Series"
-                                },
-                            ) { dismissInput(); backFocus.requestFocus(); model.setFilter(filter) }
+                        LaunchedEffect(Unit) {
+                            withFrameNanos { }
+                            queryFocus.requestFocus()
+                            keyboard?.show()
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                if (configuration.token.isBlank()) leave(onConfigure) else editingQuery = true
+                            },
+                            modifier = Modifier.fillMaxWidth().height(58.dp).focusRequester(searchFocus),
+                            scale = ButtonDefaults.scale(focusedScale = 1.02f),
+                            colors = ButtonDefaults.colors(
+                                containerColor = Color(0xFF334C6B), contentColor = Color.White,
+                                focusedContainerColor = CatalogAccent, focusedContentColor = Color(0xFF10213B),
+                            ),
+                        ) {
+                            androidx.tv.material3.Text(
+                                if (state.query.isBlank()) "Search movies and series" else "Search: ${state.query}",
+                                fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        LaunchedEffect(homeFocusPending, state.focusEpoch, windowFocused) {
+                            if (windowFocused && (homeFocusPending || state.titles.isEmpty())) {
+                                withFrameNanos { }
+                                searchFocus.requestFocus()
+                                homeFocusPending = false
+                            }
                         }
                     }
-                    CatalogStatus(state, model::retry)
-                    if (!state.loading && state.error == null && state.titles.isEmpty()) {
-                        Text(if (state.searched) "No matching titles. Try another query or filter." else "Search TMDB by title. Sources are shown separately.", color = CatalogMuted)
+                    if (configuration.token.isBlank()) {
+                        Text("Connect TMDB in Settings to start searching.", color = CatalogMuted, fontSize = 14.sp)
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Browse", color = CatalogMuted, fontSize = 13.sp)
+                            CatalogFilter.entries.forEach { filter ->
+                                CatalogButton(
+                                    when (filter) {
+                                        CatalogFilter.ALL -> "All"
+                                        CatalogFilter.MOVIES -> "Movies"
+                                        CatalogFilter.SERIES -> "Series"
+                                    },
+                                    selected = state.filter == filter,
+                                ) {
+                                    dismissInput()
+                                    homeFocusPending = true
+                                    model.setFilter(filter)
+                                }
+                            }
+                        }
                     }
-                    if (state.titles.isNotEmpty()) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Page ${state.page} · TMDB", color = CatalogMuted)
-                            if (state.page > 1) CatalogButton("Previous page") { model.search(state.page - 1) }
-                            if (state.hasMore) CatalogButton("Next page") { model.search(state.page + 1) }
+                }
+                CatalogStatus(state) {
+                    dismissInput()
+                    homeFocusPending = true
+                    model.retry()
+                }
+                if (!state.loading && state.error == null && state.searched && state.titles.isEmpty()) {
+                    Text("No matching titles. Try another search or filter.", color = CatalogMuted)
+                }
+                if (state.titles.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Results · Page ${state.page}", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                        Text("TMDB", color = CatalogMuted, fontSize = 12.sp)
+                        if (state.page > 1) CatalogButton("Previous page") {
+                            homeFocusPending = true
+                            model.search(state.page - 1)
+                        }
+                        if (state.hasMore) CatalogButton("Next page") {
+                            homeFocusPending = true
+                            model.search(state.page + 1)
                         }
                     }
                     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                    val posterHeight = (maxHeight - 84.dp).coerceIn(80.dp, 220.dp)
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(150.dp),
-                        state = resultsScroll,
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                    ) {
-                        itemsIndexed(state.titles, key = { _, title -> title.identity() }) { _, title ->
-                            val requester = remember { FocusRequester() }
-                            LaunchedEffect(pendingResultFocus) {
-                                if (pendingResultFocus == title.identity()) {
-                                    withFrameNanos { }
-                                    requester.requestFocus()
-                                    pendingResultFocus = null
+                        val posterHeight = (maxHeight - 94.dp).coerceIn(60.dp, 220.dp)
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(150.dp),
+                            state = resultsScroll,
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            itemsIndexed(state.titles, key = { _, title -> title.identity() }) { _, title ->
+                                val requester = remember { FocusRequester() }
+                                LaunchedEffect(pendingResultFocus) {
+                                    if (pendingResultFocus == title.identity()) {
+                                        withFrameNanos { }
+                                        requester.requestFocus()
+                                        pendingResultFocus = null
+                                    }
                                 }
-                            }
-                            CatalogTile(Modifier.focusRequester(requester), onClick = { model.select(title) }) {
-                                CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
-                                    Modifier.fillMaxWidth().height(posterHeight))
-                                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(title.title, color = Color.White, fontSize = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Text(title.subtitle(), color = CatalogMuted, fontSize = 13.sp)
+                                CatalogTile(Modifier.focusRequester(requester), onClick = { model.select(title) }) {
+                                    CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
+                                        Modifier.fillMaxWidth().height(posterHeight))
+                                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(title.title, color = Color.White, fontSize = 17.sp, lineHeight = 20.sp,
+                                            minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        Text(title.subtitle(), color = CatalogMuted, fontSize = 13.sp, lineHeight = 16.sp,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
                                 }
                             }
                         }
                     }
+                } else if (welcoming) {
+                    Column(
+                        Modifier.weight(1f).fillMaxWidth().padding(start = 4.dp, top = 10.dp),
+                        verticalArrangement = Arrangement.Bottom,
+                    ) {
+                        Text("Your next story starts here.", color = CatalogMuted, fontSize = 18.sp)
+                        Text("Movie and series metadata by TMDB", color = CatalogMuted, fontSize = 12.sp)
                     }
                 }
-                CatalogRoute.DETAILS -> CatalogDetailsContent(state, model::retry, model::findSources, model::selectSeason)
-                CatalogRoute.EPISODES -> CatalogEpisodesContent(state, model::retry, model::findSources)
-                CatalogRoute.SOURCES -> CatalogSourcesContent(state, model::retry) { source ->
-                    model.selection(source, configuration)?.let { selection -> leave { onOpenSource(selection) } }
-                }
+            }
+            CatalogRoute.DETAILS -> CatalogDetailsContent(state, model::retry, model::findSources, model::selectSeason)
+            CatalogRoute.EPISODES -> CatalogEpisodesContent(state, model::retry, model::findSources)
+            CatalogRoute.SOURCES -> CatalogSourcesContent(state, model::retry) { source ->
+                model.selection(source, configuration)?.let { selection -> leave { onOpenSource(selection) } }
             }
         }
     }
@@ -561,7 +671,7 @@ private fun CatalogSourcesContent(state: MovieCatalogState, retry: () -> Unit, s
                             }
                             if (metadata.isNotEmpty()) Text(metadata.joinToString(" · "), color = CatalogMuted)
                             source.filename?.let { Text(it, color = CatalogMuted, fontSize = 13.sp) }
-                            Text("Open selected torrent", color = CatalogAccent, fontSize = 14.sp)
+                            Text("Play", color = CatalogAccent, fontSize = 14.sp)
                         }
                     }
                 }
@@ -590,11 +700,20 @@ private fun CatalogStatus(state: MovieCatalogState, retry: () -> Unit) {
 }
 
 @Composable
-private fun CatalogButton(label: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+private fun CatalogButton(
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+) {
     Button(
         onClick = onClick, modifier = modifier, enabled = enabled,
-        colors = ButtonDefaults.colors(containerColor = Color(0xFF283246), contentColor = Color.White,
-            focusedContainerColor = CatalogAccent, focusedContentColor = Color(0xFF10213B)),
+        colors = ButtonDefaults.colors(
+            containerColor = if (selected) Color(0xFF425F80) else Color(0xFF283246),
+            contentColor = Color.White,
+            focusedContainerColor = CatalogAccent, focusedContentColor = Color(0xFF10213B),
+        ),
     ) { androidx.tv.material3.Text(label, fontSize = 14.sp) }
 }
 

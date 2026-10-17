@@ -11,7 +11,6 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -20,21 +19,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -49,12 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -101,7 +89,6 @@ import androidx.media3.extractor.text.DefaultSubtitleParserFactory
 import androidx.media3.extractor.text.SubtitleExtractor
 
 private const val PLAYER_TAG = "LumaPlayer"
-private const val SINTEL_URL = "https://webtorrent.io/torrents/sintel.torrent"
 
 @androidx.annotation.OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
@@ -204,7 +191,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) model.acceptIntent(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                PlaybackScreen(model, onPlayerViewChanged = { view ->
+                PlaybackScreen(model, onExit = { finishAndRemoveTask() }, onPlayerViewChanged = { view ->
                     if (activePlayerView !== view) {
                         activePlayerView?.player?.removeListener(playerActionsListener)
                         navigatingPlayerActions = false
@@ -301,6 +288,7 @@ class MainActivity : ComponentActivity() {
         if (!choosingSubtitle) {
             activePlayerView = null
             model.stop("Stopped while LumaStream is in the background. Open a source to resume.")
+            if (model.screen.value.page == AppPage.PLAYER) model.navigate(AppPage.CATALOG)
         }
         super.onStop()
     }
@@ -309,7 +297,6 @@ class MainActivity : ComponentActivity() {
 enum class AppPage { CATALOG, ARCHIVE, SETTINGS, PLAYER }
 
 data class PlaybackScreenState(
-    val input: String = "",
     val page: AppPage = AppPage.CATALOG,
     val configuration: CatalogConfiguration = CatalogConfiguration(),
     val configurationSaving: Boolean = false,
@@ -377,10 +364,6 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun setInput(value: String) {
-        mutableScreen.update { it.copy(input = value) }
-    }
-
     fun navigate(page: AppPage) {
         mutableScreen.update { it.copy(page = page) }
     }
@@ -408,7 +391,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         runCommand {
             val magnet = catalogMagnet(selection.source)
             mutableScreen.update {
-                it.copy(input = magnet.toString(), busy = true, error = null, notice = "Opening selected source…", title = "")
+                it.copy(busy = true, error = null, notice = "Opening selected source…", title = "")
             }
             engine.open(magnet)
             val selected = selectCatalogFile(selection, engine.state.value.files)
@@ -432,23 +415,13 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun openInput() = open(Uri.parse(screen.value.input.trim()))
-
-    fun openSample() = open(Uri.parse(SINTEL_URL))
-
-    fun documentPickerUnavailable() {
-        mutableScreen.update {
-            it.copy(error = "This TV has no document picker. Enter a magnet or HTTPS .torrent link, use the Sintel sample, or open a torrent from a file manager.")
-        }
-    }
-
     fun open(uri: Uri) {
         navigate(AppPage.PLAYER)
         when (uri.scheme?.lowercase(Locale.ROOT)) {
             "magnet", "https", "content", "file" -> Unit
             else -> {
                 mutableScreen.update {
-                    it.copy(error = "Enter a magnet link or HTTPS .torrent URL, or choose a .torrent document.")
+                    it.copy(error = "This source is not supported. Choose another title or source.")
                 }
                 return
             }
@@ -456,7 +429,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         releasePlayer()
         runCommand {
             mutableScreen.update {
-                it.copy(input = uri.toString(), busy = true, error = null, notice = "Opening torrent…", title = "")
+                it.copy(busy = true, error = null, notice = "Opening selected source…", title = "")
             }
             engine.open(uri)
             mutableScreen.update { it.copy(notice = "Choose a video file below to start playback.") }
@@ -613,8 +586,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
 @Composable
 @androidx.annotation.OptIn(UnstableApi::class)
-@OptIn(ExperimentalLayoutApi::class)
-private fun PlaybackScreen(model: PlaybackViewModel, onPlayerViewChanged: (PlayerView?) -> Unit) {
+private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlayerViewChanged: (PlayerView?) -> Unit) {
     val screen by model.screen.collectAsState()
     val torrent by model.torrent.collectAsState()
     when (screen.page) {
@@ -623,7 +595,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onPlayerViewChanged: (Playe
                 configuration = screen.configuration,
                 onConfigure = { model.navigate(AppPage.SETTINGS) },
                 onArchive = { model.navigate(AppPage.ARCHIVE) },
-                onBack = { model.navigate(AppPage.PLAYER) },
+                onBack = onExit,
                 onOpenSource = model::openCatalog,
             )
             return
@@ -647,114 +619,52 @@ private fun PlaybackScreen(model: PlaybackViewModel, onPlayerViewChanged: (Playe
         }
         AppPage.PLAYER -> Unit
     }
-    val keyboard = LocalSoftwareKeyboardController.current
-    val focusManager = LocalFocusManager.current
-    val imeVisible = WindowInsets.isImeVisible
-    var inputFocused by remember { mutableStateOf(false) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) model.open(uri)
+    fun returnToCatalog() {
+        model.stop()
+        model.navigate(AppPage.CATALOG)
     }
-    BackHandler(enabled = imeVisible || inputFocused || screen.player != null || screen.busy || torrent.files.isNotEmpty()) {
-        if (screen.player == null && inputFocused) {
-            keyboard?.hide()
-            focusManager.clearFocus(force = true)
-            inputFocused = false
-        } else {
-            model.stop("Cancelled and stopped. Open a source to play again.")
-        }
-    }
+    BackHandler(onBack = ::returnToCatalog)
     val player = screen.player
     if (player != null) {
         VideoSurface(player, screen.title, torrent, screen.error, onPlayerViewChanged)
         return
     }
-    val initialFocus = remember { FocusRequester() }
+    val backFocus = remember { FocusRequester() }
     val firstFileFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
     LaunchedEffect(torrent.files, screen.busy) {
         if (torrent.files.isNotEmpty() && !screen.busy) {
-            keyboard?.hide()
-            focusManager.clearFocus(force = true)
-            // Five source/status rows and the section heading precede the first video.
-            listState.scrollToItem(6)
+            // Header, status and section heading precede the video choices.
+            listState.scrollToItem(3)
             withFrameNanos { }
             firstFileFocus.requestFocus()
-        } else if (torrent.files.isEmpty() && !screen.busy) {
+        } else {
             listState.scrollToItem(0)
             withFrameNanos { }
-            initialFocus.requestFocus()
+            backFocus.requestFocus()
         }
     }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().background(Color(0xFF10131B)).padding(horizontal = 44.dp, vertical = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         item {
-            Text("LumaStream", color = Color.White, fontSize = 30.sp)
-            Text("Embedded torrent playback · Use only content you are authorized to share.", color = Color(0xFFBCC5D7), fontSize = 14.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                RemoteButton("Movies and series", enabled = !screen.busy && torrent.files.isEmpty()) {
-                    model.navigate(AppPage.CATALOG)
-                }
-                RemoteButton("Archive", enabled = !screen.busy && torrent.files.isEmpty()) {
-                    model.navigate(AppPage.ARCHIVE)
-                }
-                RemoteButton("Catalog settings", enabled = !screen.busy && torrent.files.isEmpty()) {
-                    model.navigate(AppPage.SETTINGS)
-                }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("LumaStream", color = Color.White, fontSize = 30.sp)
+                RemoteButton("Back to search", modifier = Modifier.focusRequester(backFocus), onClick = ::returnToCatalog)
             }
         }
         item {
-            OutlinedTextField(
-                value = screen.input,
-                onValueChange = model::setInput,
-                modifier = Modifier.fillMaxWidth().onFocusChanged { inputFocused = it.isFocused },
-                label = { Text("Magnet link or HTTPS .torrent URL") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = {
-                    keyboard?.hide()
-                    focusManager.clearFocus(force = true)
-                    model.openInput()
-                }),
-            )
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                RemoteButton("Open link", enabled = screen.input.isNotBlank()) {
-                    keyboard?.hide()
-                    focusManager.clearFocus(force = true)
-                    model.openInput()
-                }
-                RemoteButton("Choose .torrent") {
-                    try {
-                        picker.launch(arrayOf("application/x-bittorrent", "application/octet-stream", "*/*"))
-                    } catch (_: ActivityNotFoundException) {
-                        model.documentPickerUnavailable()
-                    }
-                }
-                RemoteButton("Open Sintel sample", modifier = Modifier.focusRequester(initialFocus), onClick = model::openSample)
-                if (screen.busy || torrent.files.isNotEmpty()) {
-                    RemoteButton("Stop / cancel", onClick = { model.stop() })
-                }
-            }
-        }
-        item {
-            Text("Sintel · Blender Foundation · CC BY 3.0 · Legally distributable sample", color = Color(0xFFBCC5D7), fontSize = 13.sp)
-            Text("BitTorrent may upload to peers. Opening a source shares your network IP with them.", color = Color(0xFFBCC5D7), fontSize = 13.sp)
-        }
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (screen.busy) CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                    Text(torrent.message, color = Color.White)
+                    Text(if (screen.busy) "Preparing your video…" else "Playback", color = Color.White, fontSize = 22.sp)
                 }
-                Text(transferLabel(torrent), color = Color(0xFFBCC5D7), fontSize = 14.sp)
-                screen.notice?.let { Text(it, color = Color(0xFFB8D8FF), fontSize = 14.sp) }
+                screen.notice?.let { Text(it, color = Color(0xFFB8D8FF), fontSize = 16.sp) }
                 (screen.error ?: torrent.error)?.let {
-                    Text(it, color = Color(0xFFFFA6A6), fontSize = 15.sp)
-                    Text("Check the source or connection, then open it again or choose another torrent.", color = Color(0xFFBCC5D7), fontSize = 13.sp)
+                    Text(it, color = Color(0xFFFFA6A6), fontSize = 16.sp)
+                    Text("Return to search and choose another source.", color = Color(0xFFBCC5D7), fontSize = 14.sp)
                 }
             }
         }
