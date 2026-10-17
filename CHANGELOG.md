@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- Added a visual TMDB movie/series catalog, separate Stremio torrent-source flow, private configuration, bounded artwork caching and TMDB attribution. Verified credentialed search, artwork, episodes and real source resolution on WK03K; successful catalog-source video playback remains pending due to source availability/format limitations.
+- Added a visual TMDB movie/series catalog, separate Stremio torrent-source flow, private configuration, bounded artwork caching and TMDB attribution. Verified credentialed search, artwork, episodes, source resolution and catalog-selected Sintel playback before full download on WK03K.
 - Added strict selected-file checks and seven regression tests for episode identity, ambiguous files, conflicting provider metadata, remake years and non-contiguous torrent indexes.
 - Fixed poster-grid height so titles/year/type remain visible, and made the movie source action reachable by vertical D-pad navigation; verified both on the projector.
+- Fixed peer discovery for catalog providers returning hashes without trackers: use two public trackers only when the provider supplies none. Preserved explicit tracker lists and conventional readable magnet hashes; diagnosed DHT-only discovery failure with real native evidence.
 - Documented LumaStream's purpose, target device, technical direction, and pull-request workflow.
 - Standardized project documentation and code comments on English; translated the existing README and changelog.
 - Added an installable ARMv7 Android TV debug APK with an embedded libtorrent4j engine and Media3 playback.
