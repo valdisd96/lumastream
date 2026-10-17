@@ -9,5 +9,5 @@
 - Added verified-piece streaming with demand-based priorities, cancellable buffering, seeking, storage-reserve checks, unsafe-path rejection, and session cleanup.
 - Added remote pause/resume, backward/forward seeking, audio/settings access, and automatic file focus; fixed keyboard dismissal and native-player key routing on the projector.
 - Verified real 1080p playback before full download, seeking to missing pieces, magnet metadata acquisition, audio-track switching, invalid-input handling, and background cache cleanup on WK03K. Physical speaker audibility still needs owner confirmation.
-- Added a pinned Gradle wrapper, Android build/lint CI with APK artifacts, and bundled native dependency notices.
+- Added a pinned Gradle wrapper, Android build/lint CI with explicit SDK packages and APK artifacts, and bundled native dependency notices.
 - Catalog search, history, external subtitle loading, and the proposed rolling disk cache remain planned product work, not part of this playback milestone.
