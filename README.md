@@ -11,7 +11,7 @@ An Android TV application for playing torrents before the download completes, in
 - Stop playback and the native session when leaving the application; clean the session cache on stop or when opening another source.
 - Search Internet Archive video items, browse bounded result pages, review creator/source/reported license, and open an item's torrent through the same video-selection flow.
 
-The playback milestone, Internet Archive search and visual TMDB catalog have device verification, including first-frame playback from a catalog-selected torrent source. History and rolling disk-cache eviction are not implemented yet.
+The playback milestone, Internet Archive search and visual TMDB catalog have device verification, including first-frame playback from a catalog-selected torrent source. Catalog watch history and resume are implemented; rolling disk-cache eviction is not.
 
 ## Visual movie and series catalog
 
@@ -98,6 +98,18 @@ To open the visible subtitle icon with the remote, press **Down → Left → OK*
 
 Verified on WK03K after the CC focus correction: Down/Left visibly focused CC, OK opened the subtitle menu, Back/Right/OK opened settings, and Up restored pause/seek behavior. Back from the action row retained the paused video; a subsequent Back stopped playback. Build and lint passed.
 
+### Continue watching and watched titles
+
+Home shows **Continue watching · Watched** after catalog playback renders its first frame. Cards show the poster, title, movie year or series season/episode, saved position, duration and progress. Each series has one Home card for its most recently watched episode; positions remain separate for individual episodes. Search results replace this row while browsing.
+
+Select a card with the remote to **Continue**, **Start from beginning**, or **Choose another source**. Direct resume reopens the saved torrent and exact selected file without repeating TMDB search. Another source is looked up for the same title/episode; transferring the saved position requires an explicit choice because different cuts can have different timing. Finished videos remain visible as **Watched** and offer restart rather than resume.
+
+Positions are saved every ten seconds while playing, on pause/seek, and before releasing playback on exit. Unexpected process termination can lose progress since the last completed write. Failed preparation does not replace an existing resume point. History is an atomic app-private `files/watch-history.json` file containing at most 100 recent movie/episode records, cached catalog metadata and source information, but no catalog token. Read/write failures are reported on Home; unreadable history is not silently overwritten. External torrent intents and Archive playback do not create catalog history.
+
+History does not retain downloaded video: leaving still stops the native session and removes its cache. Resume may buffer while pieces are downloaded again; unavailable sources still require choosing another source.
+
+Verified on WK03K: `assembleDebug`, `testDebugUnitTest` and `lintDebug` passed, including eight history regression tests. Catalog-selected Sintel rendered, was sought/paused and backgrounded, and persisted position `53481` ms. After terminating the already-backgrounded process and relaunching, Home displayed the saved card; Continue rendered its first frame at exactly `53481` ms and advanced beyond 62 seconds. Start from beginning rendered at `0` ms. History's alternate-source action loaded Sintel sources and selecting another source displayed the explicit transfer warning. Seeking to the end produced `ENDED`, stopped the native session, and displayed **Watched** on Home. Screenshots verified the Home card, resume dialog, transfer warning, resumed video and finished card. Episode identity/roundtrip are unit-tested; live series resume and audible output were not independently verified in this run.
+
 ### Subtitles
 
 During playback, press **Up** to select a supported embedded subtitle track, turn subtitles **Off**, or load one external **UTF-8 SRT / WebVTT** file. External subtitles can come from a system document picker or a direct HTTPS URL. On the URL screen, use Back to dismiss the keyboard, then Down and OK to activate Load. Loading another external file replaces the previous one; position and play/pause state are retained while the media source prepares again. Document selection pauses playback; resume with OK after returning.
@@ -158,7 +170,7 @@ The final build also exercised an explicit empty-results state, detail-to-result
 
 Use English for all documentation and code comments. Work in task branches; code and related documentation go through PRs into `main`. The only direct initialization commit was empty. PRs report checks actually performed and known limitations. Add tests for meaningful behavior and regressions, not coverage targets; device playback verification remains necessary.
 
-Next product work: bounded rolling storage, history and automatic subtitle discovery. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
+Next product work: bounded rolling storage and automatic subtitle discovery. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
 
 ### Resuming in a new agent session
 
