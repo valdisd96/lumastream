@@ -65,11 +65,11 @@ Send deliberate keys, then inspect the result instead of firing long blind seque
 
 | Keycode | Playback action |
 | --- | --- |
-| `KEYCODE_DPAD_CENTER` | Pause/resume; select the focused item outside playback |
-| `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | Seek -10 / +30 seconds |
-| `KEYCODE_DPAD_UP` | Open subtitles (Off, supported tracks, document or HTTPS import) |
-| `KEYCODE_DPAD_DOWN` | Open settings |
-| `KEYCODE_BACK` | Dismiss menu/keyboard first; otherwise stop playback |
+| `KEYCODE_DPAD_CENTER` | Pause/resume; activate focused CC/settings button in the bottom action row |
+| `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | Seek -10 / +30 seconds; in the bottom action row select CC / settings |
+| `KEYCODE_DPAD_UP` | Open subtitles; leave the bottom action row if navigating it |
+| `KEYCODE_DPAD_DOWN` | Focus the bottom action row, initially settings; Left selects CC |
+| `KEYCODE_BACK` | Dismiss menu/keyboard, leave the bottom action row, otherwise stop playback |
 | `KEYCODE_HOME` | Background app; current implementation stops the torrent and cleans the session |
 
 Menus own their own navigation. Do not interpret a key as a playback command while an audio/settings popup is open. Compose/native PlayerView focus required explicit key routing on this device; a successful `input` command is not proof that the intended action occurred.

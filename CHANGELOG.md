@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Added a remote subtitle menu (Up), supported-track selection and Off, plus bounded UTF-8 SRT/WebVTT import from documents or direct HTTPS URLs. Imports preserve position and pause state and use Media3's extraction-time subtitle decoding.
+- Fixed remote access to the visible CC button: Down focuses the bottom action row, Left/Right select CC/settings, and OK opens the focused menu. Up/Back leave the row without seeking or stopping playback. CC remains usable for external imports even without embedded subtitle tracks.
 - Added a visual TMDB movie/series catalog, separate Stremio torrent-source flow, private configuration, bounded artwork caching and TMDB attribution. Verified credentialed search, artwork, episodes, source resolution and catalog-selected Sintel playback before full download on WK03K.
 - Added strict selected-file checks and seven regression tests for episode identity, ambiguous files, conflicting provider metadata, remake years and non-contiguous torrent indexes.
 - Fixed poster-grid height so titles/year/type remain visible, and made the movie source action reachable by vertical D-pad navigation; verified both on the projector.

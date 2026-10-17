@@ -107,6 +107,43 @@ private const val SINTEL_URL = "https://webtorrent.io/torrents/sintel.torrent"
 class MainActivity : ComponentActivity() {
     private val model: PlaybackViewModel by viewModels()
     private var activePlayerView: PlayerView? = null
+    private var navigatingPlayerActions = false
+    private var focusedPlayerAction = androidx.media3.ui.R.id.exo_settings
+    private val playerActionsListener = object : Player.Listener {
+        override fun onEvents(player: Player, events: Player.Events) {
+            val view = activePlayerView ?: return
+            // Media3 disables CC when there are no embedded tracks. Our CC also imports files.
+            view.post {
+                if (activePlayerView !== view) return@post
+                view.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle).apply {
+                    isEnabled = true
+                    alpha = 1f
+                }
+                if (navigatingPlayerActions) view.findViewById<View>(focusedPlayerAction).requestFocus()
+            }
+        }
+    }
+
+    private fun focusPlayerAction(view: PlayerView, id: Int) {
+        navigatingPlayerActions = true
+        focusedPlayerAction = id
+        view.controllerShowTimeoutMs = 0
+        view.showController()
+        view.findViewById<View>(id).apply {
+            // CC also imports external subtitles when the video has no text tracks.
+            isEnabled = true
+            isFocusable = true
+            alpha = 1f
+            requestFocus()
+        }
+    }
+
+    private fun leavePlayerActions(view: PlayerView) {
+        navigatingPlayerActions = false
+        view.controllerShowTimeoutMs = 5_000
+        view.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause).requestFocus()
+        view.showController()
+    }
     private var choosingSubtitle = false
     private val subtitlePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         choosingSubtitle = false
@@ -167,7 +204,16 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) model.acceptIntent(intent)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                PlaybackScreen(model, onPlayerViewChanged = { activePlayerView = it })
+                PlaybackScreen(model, onPlayerViewChanged = { view ->
+                    if (activePlayerView !== view) {
+                        activePlayerView?.player?.removeListener(playerActionsListener)
+                        navigatingPlayerActions = false
+                        view?.player?.addListener(playerActionsListener)
+                    }
+                    activePlayerView = view
+                    view?.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)
+                        ?.setOnClickListener { showSubtitles() }
+                })
             }
         }
     }
@@ -182,6 +228,32 @@ class MainActivity : ComponentActivity() {
         val view = activePlayerView
         val player = view?.player
         if (player != null && view.hasWindowFocus()) {
+            if (navigatingPlayerActions) {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            focusPlayerAction(view, if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT)
+                                androidx.media3.ui.R.id.exo_subtitle else androidx.media3.ui.R.id.exo_settings)
+                        }
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                            if (view.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle).hasFocus()) {
+                                showSubtitles()
+                            } else {
+                                view.findViewById<View>(androidx.media3.ui.R.id.exo_settings).performClick()
+                            }
+                        }
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_BACK -> {
+                        if (event.action == KeyEvent.ACTION_UP) leavePlayerActions(view)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> return true
+                }
+            }
             when (event.keyCode) {
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
@@ -203,8 +275,7 @@ class MainActivity : ComponentActivity() {
                 }
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                        view.showController()
-                        view.findViewById<View>(androidx.media3.ui.R.id.exo_settings).performClick()
+                        focusPlayerAction(view, androidx.media3.ui.R.id.exo_settings)
                     }
                     return true
                 }
@@ -774,7 +845,7 @@ private fun VideoSurface(
                     .background(Color.Black.copy(alpha = 0.65f)).padding(horizontal = 30.dp, vertical = 10.dp),
             ) {
                 Text(title, color = Color.White, fontSize = 17.sp, maxLines = 1)
-                Text("${transferLabel(torrent)}  ·  Left/right: seek  ·  OK: pause/play  ·  Up: subtitles  ·  Down: settings  ·  Back: stop", color = Color(0xFFD3D9E5), fontSize = 12.sp)
+                Text("${transferLabel(torrent)}  ·  Left/right: seek  ·  OK: pause/play  ·  Up: subtitles  ·  Down: CC/settings buttons  ·  Back: stop", color = Color(0xFFD3D9E5), fontSize = 12.sp)
                 (subtitleError ?: torrent.error)?.let { Text(it, color = Color(0xFFFFA6A6), fontSize = 13.sp) }
             }
         }

@@ -80,13 +80,17 @@ During playback:
 
 | Key | Action |
 | --- | --- |
-| OK / Enter | Pause or resume |
-| Left / Right | Seek backward 10 seconds / forward 30 seconds |
-| Up | Open subtitles: Off, supported tracks, external document or HTTPS URL |
-| Down | Open settings, including audio tracks and playback speed |
-| Back | Dismiss an open menu, or stop playback and clear the session |
+| OK / Enter | Pause/resume, or open the focused CC/settings button |
+| Left / Right | Seek -10 / +30 seconds; in the bottom action row, select CC / settings |
+| Up | Open subtitles; from the bottom action row, return to playback controls |
+| Down | Focus the bottom action row, starting on settings |
+| Back | Dismiss a menu, leave the bottom action row, or stop playback and clear the session |
 
 When editing a link, Back dismisses input focus/keyboard instead of stopping the torrent. If the TV has no document-picker application, use a link or an external file manager that grants URI read access.
+
+To open the visible subtitle icon with the remote, press **Down → Left → OK**. For audio tracks or speed, press **Down → OK**. The bottom action row stays visible while navigating; Up or Back leaves that row and restores normal seeking/pause shortcuts.
+
+Verified on WK03K after the CC focus correction: Down/Left visibly focused CC, OK opened the subtitle menu, Back/Right/OK opened settings, and Up restored pause/seek behavior. Back from the action row retained the paused video; a subsequent Back stopped playback. Build and lint passed.
 
 ### Subtitles
 
