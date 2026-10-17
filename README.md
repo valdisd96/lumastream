@@ -11,7 +11,23 @@ An Android TV application for playing torrents before the download completes, in
 - Stop playback and the native session when leaving the application; clean the session cache on stop or when opening another source.
 - Search Internet Archive video items, browse bounded result pages, review creator/source/reported license, and open an item's torrent through the same video-selection flow.
 
-The first playback milestone and single-source Internet Archive search are implemented. Multi-source search, history, external subtitle loading, and rolling disk-cache eviction are not implemented yet.
+The playback milestone and Internet Archive search have device verification. The visual TMDB catalog, artwork, series navigation and Stremio source resolution also have device verification; successful video playback through a catalog-selected source remains an acceptance blocker. History, external subtitle loading, and rolling disk-cache eviction are not implemented yet.
+
+## Visual movie and series catalog
+
+The initial screen separates movie/series metadata from torrent availability. Configure a personal **TMDB API Read Access Token** in Settings; this is the read token, not the shorter API key. Obtain it through your [TMDB API account settings](https://www.themoviedb.org/settings/api). Do not commit or paste credentials into issues. Settings are stored in app-private `files/catalog-config.json`; Android backup is disabled. The token is not bundled in the APK.
+
+Search supports All / Movies / Series, poster cards, year and media type. Details show available artwork, descriptions, seasons and episodes. Source requests use the selected title's IMDb ID and, for series, its season and episode. Archive remains a separate navigation destination, not a fallback mixed into TMDB results.
+
+Settings accept an HTTPS Stremio `/manifest.json` URL. The current default is Torrentio; live source lists were exercised on the projector for Sintel, Big Buck Bunny and The Studio S1E2. Successful playback through this integration has not yet been verified. Only torrent `infoHash` streams are supported; HTTP video, debrid, DRM and external-player streams are not. Provider availability and permission to obtain each work are separate concerns. Metadata access is not permission to download a work.
+
+Sources display provider-reported quality, languages, size and seeders only when available. Identity checks precede selection; duplicates are combined by hash and selected file. Actual torrent file metadata is checked before playback: contradictory filename/year/episode information or ambiguous episode files produce an error rather than selecting the largest video.
+
+Artwork uses bounded sizes and a shared 16 MiB memory / 64 MiB disk cache. Text remains available when images fail. Settings include the official TMDB logo and required non-endorsement attribution. Review [TMDB usage requirements](https://developer.themoviedb.org/docs/faq) before distribution; commercial use requires separate agreement.
+
+Verification on WK03K: `assembleDebug`, `testDebugUnitTest` and `lintDebug` passed; seven file-selection regression tests cover episode identity, ambiguity, contradictory metadata and torrent-index handling. With the owner's private token, real Interstellar and The Studio searches, localized posters, film details, series filtering, an empty filtered result, seasons, episode stills/dates, Back navigation and The Studio S1E2 source identity were exercised. Source listing for that series was checked without downloading it. Device checks exposed and fixed clipped card labels and a movie source-action button skipped by D-pad navigation; both fixes were exercised on the installed build.
+
+Catalog playback attempts used open Blender films. Sintel 720p and Big Buck Bunny 720p sources timed out during metadata acquisition after 90 seconds. Another Big Buck Bunny source had no supported video files. A 3D Big Buck Bunny source resolved 28 videos and correctly selected torrent index 3 (897,586,882 bytes), then reached Media3 with AVC 1920×2160; the projector rejected it with `ERROR_CODE_DECODING_FAILED` / `NO_EXCEEDS_CAPABILITIES`. Native sessions stopped after these errors. These checks prove real source resolution, selection and failure handling, not successful first-frame playback. A reachable, device-compatible authorized source is still required before marking the feature ready.
 
 ## Target device and stack
 
@@ -116,7 +132,7 @@ The final build also exercised an explicit empty-results state, detail-to-result
 
 Use English for all documentation and code comments. Work in task branches; code and related documentation go through PRs into `main`. The only direct initialization commit was empty. PRs report checks actually performed and known limitations. Add tests for meaningful behavior and regressions, not coverage targets; device playback verification remains necessary.
 
-Next product work: a second catalog with verified API access and terms, parallel search and infohash deduplication, bounded rolling storage, history, and subtitle handling. Internet Archive is the only implemented catalog; exhaustive search across all torrents is not promised. Room, DataStore, and additional networking dependencies will be added only when their features need them.
+Next: complete catalog-source first-frame playback with a reachable, device-compatible authorized source. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Then address bounded rolling storage, history and subtitles. Exhaustive search across all torrents is not promised.
 
 ### Resuming in a new agent session
 
