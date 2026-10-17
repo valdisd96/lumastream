@@ -426,7 +426,6 @@ fun MovieCatalogScreen(
             },
         )
     }
-
     Column(
         Modifier.fillMaxSize()
             .background(Brush.verticalGradient(listOf(Color(0xFF1A263A), CatalogBackground, Color(0xFF0C1018))))
