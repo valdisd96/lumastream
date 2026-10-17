@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added a remote subtitle menu (Up), supported-track selection and Off, plus bounded UTF-8 SRT/WebVTT import from documents or direct HTTPS URLs. Imports preserve position and pause state and use Media3's extraction-time subtitle decoding.
+- Fixed remote access to the visible CC button: Down focuses the bottom action row, Left/Right select CC/settings, and OK opens the focused menu. Up/Back leave the row without seeking or stopping playback. CC remains usable for external imports even without embedded subtitle tracks.
 - Added a visual TMDB movie/series catalog, separate Stremio torrent-source flow, private configuration, bounded artwork caching and TMDB attribution. Verified credentialed search, artwork, episodes, source resolution and catalog-selected Sintel playback before full download on WK03K.
 - Added strict selected-file checks and seven regression tests for episode identity, ambiguous files, conflicting provider metadata, remake years and non-contiguous torrent indexes.
 - Fixed poster-grid height so titles/year/type remain visible, and made the movie source action reachable by vertical D-pad navigation; verified both on the projector.
@@ -14,7 +16,7 @@
 - Added remote pause/resume, backward/forward seeking, audio/settings access, and automatic file focus; fixed keyboard dismissal and native-player key routing on the projector.
 - Verified real 1080p playback before full download, seeking to missing pieces, magnet metadata acquisition, audio-track switching, invalid-input handling, and background cache cleanup on WK03K. The owner confirmed audible playback through the built-in speakers on 2026-10-17.
 - Added a pinned Gradle wrapper, Android build/lint CI with explicit SDK packages and APK artifacts, and bundled native dependency notices.
-- Multi-source search, history, external subtitle loading, and the proposed rolling disk cache remain planned product work.
+- Multi-source search, history, automatic subtitle discovery, and the proposed rolling disk cache remain planned product work.
 - Added a new-session agent entry point and a project-local `projector-adb` skill covering device connection, remote controls, playback evidence, and cleanup. Added a screenshot helper verified on WK03K that strips firmware text preceding PNG data; local device details and captures are excluded from Git.
 - Added Internet Archive video search with remote query entry, bounded pagination, creator/source/license details, real metadata-to-torrent opening, cancellation, and visible availability/network errors. Added bounded HTTPS JSON reads, literal query escaping, and rate-limit cooldown handling.
 - Verified catalog-to-player Sintel playback on WK03K before full download, result pagination, and restricted-item handling. Added explicit remote query editing and prevented stale keyboard state from trapping Back on details or playback.
