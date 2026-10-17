@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a persisted catalog-language selector with English as the default, including migration of existing settings; all TMDB search/detail/episode requests use the selected language independently of query text.
+- Replaced the manual torrent-input screen with a search-first Home, clearer search/filter controls and consistent poster cards. Removed the Sintel demo button and editable torrent URLs while retaining external file-manager intents.
+- Fixed Back navigation: nested screens return through the catalog, playback Back stops the session, and Back on Home closes the activity/task instead of opening the old input screen.
 - Added a remote subtitle menu (Up), supported-track selection and Off, plus bounded UTF-8 SRT/WebVTT import from documents or direct HTTPS URLs. Imports preserve position and pause state and use Media3's extraction-time subtitle decoding.
 - Fixed remote access to the visible CC button: Down focuses the bottom action row, Left/Right select CC/settings, and OK opens the focused menu. Up/Back leave the row without seeking or stopping playback. CC remains usable for external imports even without embedded subtitle tracks.
 - Added a visual TMDB movie/series catalog, separate Stremio torrent-source flow, private configuration, bounded artwork caching and TMDB attribution. Verified credentialed search, artwork, episodes, source resolution and catalog-selected Sintel playback before full download on WK03K.

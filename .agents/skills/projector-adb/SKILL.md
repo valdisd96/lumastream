@@ -51,7 +51,7 @@ adb -s "$PROJECTOR_SERIAL" shell am start -n dev.lumastream/.MainActivity \
   -d https://webtorrent.io/torrents/big-buck-bunny.torrent
 ```
 
-Sintel is available through the **Open Sintel sample** button or `https://webtorrent.io/torrents/sintel.torrent`. Opening a torrent shows the video list; it does not itself select/play a file. Wait for metadata and inspect the screen before sending OK. The app uses `singleTask`; new external links should reuse the activity. `am start` exiting successfully does not prove playback.
+Home is a movie/series search screen, with no manual URL entry or sample button. For an explicit integration sample, open `https://webtorrent.io/torrents/sintel.torrent` via `ACTION_VIEW` as above. External torrent opening shows the video list; it does not itself select/play a file. Wait for metadata and inspect the screen before sending OK. The app uses `singleTask`; new external links should reuse the activity. `am start` exiting successfully does not prove playback.
 
 For magnet links, remember that `adb shell` introduces a second shell: host quoting alone does not protect `&` in a magnet URI. Pass a shell-quoted URI to the remote shell (for example `shlex.quote(uri)` as the `-d` argument in a Python subprocess argument list); never interpolate arbitrary URI text into shell code.
 
@@ -69,7 +69,7 @@ Send deliberate keys, then inspect the result instead of firing long blind seque
 | `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | Seek -10 / +30 seconds; in the bottom action row select CC / settings |
 | `KEYCODE_DPAD_UP` | Open subtitles; leave the bottom action row if navigating it |
 | `KEYCODE_DPAD_DOWN` | Focus the bottom action row, initially settings; Left selects CC |
-| `KEYCODE_BACK` | Dismiss menu/keyboard, leave the bottom action row, otherwise stop playback |
+| `KEYCODE_BACK` | Dismiss menu/keyboard or leave the action row; otherwise stop playback and return to catalog. On catalog Home outside editing, close the activity/task. |
 | `KEYCODE_HOME` | Background app; current implementation stops the torrent and cleans the session |
 
 Menus own their own navigation. Do not interpret a key as a playback command while an audio/settings popup is open. Compose/native PlayerView focus required explicit key routing on this device; a successful `input` command is not proof that the intended action occurred.

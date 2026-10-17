@@ -4,7 +4,7 @@ An Android TV application for playing torrents before the download completes, in
 
 ## Current functionality
 
-- Open a magnet link, an HTTPS `.torrent` URL, or a local `.torrent` through the system document picker. External `ACTION_VIEW` and `ACTION_SEND` intents are supported.
+- Search movies and series from a search-first Home screen, choose a title/episode and a source, and play without entering or editing torrent URLs. External `ACTION_VIEW` and `ACTION_SEND` torrent inputs remain supported for file managers and integration checks; the manual-link form, torrent-picker button and Sintel demo button have been removed.
 - Choose a video from a multi-file torrent; only the selected video's requested pieces and a bounded lookahead are prioritized.
 - Play through Media3, pause, seek into undownloaded sections, and choose available audio tracks through the player settings.
 - Display download progress, peers, buffering, and actionable input/network/storage errors.
@@ -19,13 +19,19 @@ The initial screen separates movie/series metadata from torrent availability. Co
 
 Search supports All / Movies / Series, poster cards, year and media type. Details show available artwork, descriptions, seasons and episodes. Source requests use the selected title's IMDb ID and, for series, its season and episode. Archive remains a separate navigation destination, not a fallback mixed into TMDB results.
 
+Settings include **Catalog language**, defaulting to **English (en-US)** for both new installs and existing configurations without a language field. Choose English, Russian, Ukrainian, German, French, Spanish, Italian, Portuguese (Brazil), Japanese, Korean or Chinese (Simplified), then **Save settings**. This saved choice controls TMDB search results, details, seasons and episode metadata, independently of the search query's language, device locale, audio and subtitles. Changing it clears the current catalog results so languages are not mixed; TMDB translation availability still varies by title.
+
 The selected filter remains active when editing a query. Use All or Movies to find Interstellar (2014); Series deliberately excludes films.
+
+Search-first Home verification on WK03K: build, unit tests and lint passed. An existing configuration without a language field produced English Interstellar results and an English synopsis. Selecting Russian with the remote, saving, and reinstalling/relaunching preserved the language and produced Russian results/overview for the same English query. Token and provider settings were unchanged; the device was returned to English. Screenshots verified Home, focused search, readable language options and complete result-card labels. Back exited Home to the TV launcher; during editing, the projector keyboard consumed the first Back, the next closed editing, and Home Back exited.
+
+The final build also exercised Home search → Sintel details → source selection → real playback. The first frame arrived with 3,063,808 of 143,100,616 bytes downloaded; a screenshot showed video and playback positions advanced. Back stopped the native session and restored catalog source selection; subsequent Back presses returned through details/results and exited to the launcher. No renewed audible-sound claim is made.
 
 Settings accept an HTTPS Stremio `/manifest.json` URL. The current default is Torrentio; live source lists were exercised on the projector for Sintel, Big Buck Bunny and The Studio S1E2, and catalog-selected Sintel playback was verified. Only torrent `infoHash` streams are supported; HTTP video, debrid, DRM and external-player streams are not. Provider availability and permission to obtain each work are separate concerns. Metadata access is not permission to download a work.
 
 Sources display provider-reported quality, languages, size and seeders only when available. Identity checks precede selection; duplicates are combined by hash and selected file. Actual torrent file metadata is checked before playback: contradictory filename/year/episode information or ambiguous episode files produce an error rather than selecting the largest video.
 
-For catalog sources without provider-supplied trackers, magnets include `udp://tracker.opentrackr.org:1337/announce` and `udp://open.demonii.com:1337/announce` alongside normal DHT discovery. Explicit provider tracker lists are preserved instead of supplemented. These public trackers receive the torrent hash and network IP; they are peer-discovery services, not playback servers. Direct user-entered magnets and private torrent documents are not modified. The validated hash uses the conventional readable `xt=urn:btih:` form; percent-encoded colons were also verified to parse correctly in libtorrent.
+For catalog sources without provider-supplied trackers, magnets include `udp://tracker.opentrackr.org:1337/announce` and `udp://open.demonii.com:1337/announce` alongside normal DHT discovery. Explicit provider tracker lists are preserved instead of supplemented. These public trackers receive the torrent hash and network IP; they are peer-discovery services, not playback servers. Externally supplied magnets and private torrent documents are not modified. The validated hash uses the conventional readable `xt=urn:btih:` form; percent-encoded colons were also verified to parse correctly in libtorrent.
 
 Artwork uses bounded sizes and a shared 16 MiB memory / 64 MiB disk cache. Text remains available when images fail. Settings include the official TMDB logo and required non-endorsement attribution. Review [TMDB usage requirements](https://developer.themoviedb.org/docs/faq) before distribution; commercial use requires separate agreement.
 
@@ -74,7 +80,7 @@ The Android GitHub Actions workflow builds and lints pull requests and `main`, a
 
 ## Use with a remote
 
-Open **LumaStream** from the TV launcher. Enter a link, choose a torrent document, or select **Open Sintel sample**. When metadata is ready, focus moves to the first video. Press OK to play.
+Open **LumaStream** from the TV launcher. Home presents one prominent **Search movies and series** control, All / Movies / Series filters, and secondary Archive / Settings buttons. Press OK on Search to type a title, then submit the keyboard search action or the Search button. Choose a poster, a season/episode for series, and a source. There are no editable torrent URLs or demo buttons in this flow.
 
 During playback:
 
@@ -84,9 +90,9 @@ During playback:
 | Left / Right | Seek -10 / +30 seconds; in the bottom action row, select CC / settings |
 | Up | Open subtitles; from the bottom action row, return to playback controls |
 | Down | Focus the bottom action row, starting on settings |
-| Back | Dismiss a menu, leave the bottom action row, or stop playback and clear the session |
+| Back | Dismiss a menu, leave the bottom action row, or stop playback and return to the catalog |
 
-When editing a link, Back dismisses input focus/keyboard instead of stopping the torrent. If the TV has no document-picker application, use a link or an external file manager that grants URI read access.
+Back from details, episodes, sources, Archive or Settings returns to the preceding catalog screen. During search editing it dismisses the keyboard/editor first. **Back on Home outside editing closes the activity and removes its task**, returning to the TV launcher rather than opening a second input screen. The remote Home key also backgrounds the app and stops its torrent session. Playback and native resources are released on exit.
 
 To open the visible subtitle icon with the remote, press **Down → Left → OK**. For audio tracks or speed, press **Down → OK**. The bottom action row stays visible while navigating; Up or Back leaves that row and restores normal seeking/pause shortcuts.
 
@@ -104,7 +110,7 @@ Device verification on WK03K: build, unit tests and lint passed. Loaded the Andr
 
 ### Internet Archive search
 
-With no torrent session open, choose **Search Internet Archive**, then **Edit query** to open the keyboard with the remote. Enter a title or creator and submit the keyboard search action or choose **Search**. **Previous page** / **Next page** replace the current page; at most 20 result entries are retained. Select a result to review its creator, source URL, and reported license, then choose **Open torrent** and select a video.
+From Home, choose **Archive**, then **Edit query** to open the keyboard with the remote. Enter a title or creator and submit the keyboard search action or choose **Search**. **Previous page** / **Next page** replace the current page; at most 20 result entries are retained. Select a result to review its creator, source URL, and reported license, then choose **Open torrent** and select a video.
 
 Back dismisses query editing first, returns from details to the selected result, or leaves search. Leaving search, backgrounding the app, or editing the query cancels outstanding catalog requests. Search results survive returning from details or reopening search within the same activity; they are not persistent history.
 
@@ -120,7 +126,7 @@ adb shell am start -n dev.lumastream/.MainActivity \
   -d https://webtorrent.io/torrents/big-buck-bunny.torrent
 ```
 
-The sample button opens [Sintel](https://durian.blender.org/about/) by the Blender Foundation, licensed under CC BY 3.0. The film is fetched at runtime, not bundled. The additional 1080p verification sample is [Big Buck Bunny](https://peach.blender.org/about/), also a Blender Foundation open movie, distributed by [WebTorrent](https://webtorrent.io/free-torrents).
+The verification films [Sintel](https://durian.blender.org/about/) and [Big Buck Bunny](https://peach.blender.org/about/) are Blender Foundation open movies licensed under CC BY 3.0 and distributed by [WebTorrent](https://webtorrent.io/free-torrents). They are fetched at runtime for verification, not bundled; there is no sample button on Home.
 
 ## Storage and playback boundaries
 

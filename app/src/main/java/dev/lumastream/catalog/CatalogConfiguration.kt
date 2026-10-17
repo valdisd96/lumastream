@@ -11,10 +11,35 @@ import org.json.JSONObject
 
 private const val DEFAULT_PROVIDER = "https://torrentio.strem.fun/manifest.json"
 
-data class CatalogConfiguration(val token: String = "", val providerManifestUrl: String = DEFAULT_PROVIDER) {
+const val DEFAULT_CATALOG_LANGUAGE = "en-US"
+
+data class CatalogLanguage(val code: String, val label: String)
+
+val SUPPORTED_CATALOG_LANGUAGES: List<CatalogLanguage> = listOf(
+    CatalogLanguage(DEFAULT_CATALOG_LANGUAGE, "English"),
+    CatalogLanguage("ru-RU", "Russian"),
+    CatalogLanguage("uk-UA", "Ukrainian"),
+    CatalogLanguage("de-DE", "German"),
+    CatalogLanguage("fr-FR", "French"),
+    CatalogLanguage("es-ES", "Spanish"),
+    CatalogLanguage("it-IT", "Italian"),
+    CatalogLanguage("pt-BR", "Portuguese (Brazil)"),
+    CatalogLanguage("ja-JP", "Japanese"),
+    CatalogLanguage("ko-KR", "Korean"),
+    CatalogLanguage("zh-CN", "Chinese (Simplified)"),
+)
+
+data class CatalogConfiguration(
+    val token: String = "",
+    val providerManifestUrl: String = DEFAULT_PROVIDER,
+    val catalogLanguage: String = DEFAULT_CATALOG_LANGUAGE,
+) {
     override fun toString(): String = "CatalogConfiguration(token=<redacted>, provider=<redacted>)"
 
     fun validated(): CatalogConfiguration {
+        require(SUPPORTED_CATALOG_LANGUAGES.any { it.code == catalogLanguage }) {
+            "Select a supported catalog language."
+        }
         val cleanToken = token.trim()
         require(cleanToken.length <= 4096 && cleanToken.none { it.isWhitespace() || it.isISOControl() }) {
             "Enter a TMDB API Read Access Token without spaces, or leave it empty to remove it."
@@ -41,7 +66,11 @@ class CatalogConfigurationStore(context: Context) {
         }
         try {
             val json = JSONObject(text)
-            CatalogConfiguration(json.optString("token"), json.optString("providerManifestUrl", DEFAULT_PROVIDER)).validated()
+            CatalogConfiguration(
+                token = json.optString("token"),
+                providerManifestUrl = json.optString("providerManifestUrl", DEFAULT_PROVIDER),
+                catalogLanguage = json.optString("catalogLanguage", DEFAULT_CATALOG_LANGUAGE),
+            ).validated()
         } catch (_: Exception) {
             throw IOException("Catalog configuration could not be read. Open Catalog settings to replace it.")
         }
@@ -50,7 +79,8 @@ class CatalogConfigurationStore(context: Context) {
     suspend fun save(configuration: CatalogConfiguration): CatalogConfiguration = withContext(Dispatchers.IO) {
         val validated = configuration.validated()
         val bytes = JSONObject().put("token", validated.token)
-            .put("providerManifestUrl", validated.providerManifestUrl).toString().toByteArray(Charsets.UTF_8)
+            .put("providerManifestUrl", validated.providerManifestUrl)
+            .put("catalogLanguage", validated.catalogLanguage).toString().toByteArray(Charsets.UTF_8)
         val output = file.startWrite()
         try {
             output.write(bytes)

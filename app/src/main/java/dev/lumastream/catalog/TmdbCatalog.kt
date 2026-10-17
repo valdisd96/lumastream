@@ -5,8 +5,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 
-class TmdbCatalog(private val token: String) {
+class TmdbCatalog(private val token: String, private val language: String) {
     private val http = CatalogHttp("TMDB")
+
+    init {
+        require(SUPPORTED_CATALOG_LANGUAGES.any { it.code == language }) {
+            "Select a supported catalog language."
+        }
+    }
 
     suspend fun search(query: String, filter: CatalogFilter, page: Int = 1): CatalogPage {
         require(page in 1..MAX_PAGES) { "Catalog page must be between 1 and $MAX_PAGES." }
@@ -84,7 +90,7 @@ class TmdbCatalog(private val token: String) {
         if (token.length > 4096 || token.any { it.isWhitespace() || it.isISOControl() }) {
             throw IOException("The TMDB API read access token is invalid.")
         }
-        val uri = Uri.parse("https://api.themoviedb.org/3/$path").buildUpon().appendQueryParameter("language", "ru-RU")
+        val uri = Uri.parse("https://api.themoviedb.org/3/$path").buildUpon().appendQueryParameter("language", language)
         parameters.forEach { (key, value) -> uri.appendQueryParameter(key, value) }
         return http.get(uri.build().toString(), token)
     }
