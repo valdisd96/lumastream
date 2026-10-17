@@ -87,7 +87,7 @@ Magnet metadata and demanded-piece waits time out after 90 seconds; torrent-docu
 
 `TorrentEngine` owns a single cancellable session and input loading. `NativeTorrent` owns native handles, validates metadata, selects the video, and changes piece priorities around the requested position. `TorrentDataSource` maps file-relative reads to global torrent piece boundaries and waits for hash verification **and completed disk writes** before reading; it never returns sparse-file holes as video data. Media3 uses this data source directly, not a separate HTTP server.
 
-`MainActivity` hosts the Compose source/file screens and Media3's native video surface. TV keys are mapped explicitly to playback actions because Compose/native-view focus is not sufficient for reliable remote control on the target device. The player is released before torrent shutdown.
+`MainActivity` hosts the Compose source/file screens and Media3's native video surface. Its `singleTask` launch mode routes external links to the same activity, preventing competing engines from sharing the session cache. TV keys are mapped explicitly to playback actions because Compose/native-view focus is not sufficient for reliable remote control on the target device. The player is released before torrent shutdown.
 
 Diagnostic logcat tags are `LumaTorrent` and `LumaPlayer`. Logs include buffering, first frames, selected tracks, download counts, seeks, errors, and playback position. Native dependency source links and licenses are bundled in [THIRD_PARTY_NOTICES.md](app/src/main/assets/THIRD_PARTY_NOTICES.md).
 
