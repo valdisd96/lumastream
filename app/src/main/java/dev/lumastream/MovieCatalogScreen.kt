@@ -417,10 +417,12 @@ fun MovieCatalogScreen(
                             if (state.hasMore) CatalogButton("Next page") { model.search(state.page + 1) }
                         }
                     }
+                    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                    val posterHeight = (maxHeight - 84.dp).coerceIn(80.dp, 220.dp)
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(150.dp),
                         state = resultsScroll,
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        modifier = Modifier.fillMaxSize(),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
@@ -435,13 +437,14 @@ fun MovieCatalogScreen(
                             }
                             CatalogTile(Modifier.focusRequester(requester), onClick = { model.select(title) }) {
                                 CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
-                                    Modifier.fillMaxWidth().aspectRatio(2f / 3f))
+                                    Modifier.fillMaxWidth().height(posterHeight))
                                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(title.title, color = Color.White, fontSize = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                     Text(title.subtitle(), color = CatalogMuted, fontSize = 13.sp)
                                 }
                             }
                         }
+                    }
                     }
                 }
                 CatalogRoute.DETAILS -> CatalogDetailsContent(state, model::retry, model::findSources, model::selectSeason)
@@ -483,7 +486,7 @@ private fun CatalogDetailsContent(
         }
         if (state.details != null) {
             if (title.kind == MediaKind.MOVIE) {
-                item { CatalogButton("Find sources") { sources(null) } }
+                item { CatalogButton("Find sources", Modifier.fillMaxWidth()) { sources(null) } }
             } else {
                 item { CatalogReadable("Seasons", heading = true) }
                 if (state.details.seasons.isEmpty()) item { CatalogReadable("TMDB has no season information for this series.") }
