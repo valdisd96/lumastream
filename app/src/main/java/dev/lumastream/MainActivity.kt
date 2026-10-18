@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -138,16 +139,22 @@ class MainActivity : ComponentActivity() {
         view.showController()
     }
     private var choosingSubtitle = false
+    private fun finishPlayerMenu() {
+        activePlayerView?.let(::leavePlayerActions)
+    }
+
     private val subtitlePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         choosingSubtitle = false
+        finishPlayerMenu()
         if (uri != null) model.loadSubtitle(uri)
     }
 
     private fun showSubtitles() {
         val player = model.screen.value.player ?: return
+        finishPlayerMenu()
         val tracks = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
             .flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
-        val labels = listOf("Off", "Choose external SRT / VTT…", "Load HTTPS subtitle URL…") + tracks.map { (group, index) ->
+        val labels = listOf("Off", "Choose external SRT / VTT…", "Load HTTPS subtitle URL…", "Subtitle timing (${subtitleDelayLabel(model.screen.value.subtitleDelayMs)})…") + tracks.map { (group, index) ->
             val format = group.getTrackFormat(index)
             val name = format.label ?: format.language ?: "Subtitle ${index + 1}"
             if (group.isTrackSelected(index)) "$name (selected)" else name
@@ -175,16 +182,52 @@ class MainActivity : ComponentActivity() {
                     }
                     AlertDialog.Builder(this).setTitle("SRT / WebVTT URL").setView(input)
                         .setPositiveButton("Load") { _, _ -> model.loadSubtitle(Uri.parse(input.text.toString().trim())) }
-                        .setNegativeButton("Cancel", null).show()
+                        .setNegativeButton("Cancel", null).setOnDismissListener { finishPlayerMenu() }.show()
                 }
+                3 -> showSubtitleTiming()
                 else -> {
-                    val (group, index) = tracks[choice - 3]
+                    val (group, index) = tracks[choice - 4]
                     player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
                         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                         .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index)).build()
                 }
             }
-        }.setNegativeButton("Cancel", null).show()
+        }.setNegativeButton("Cancel", null).setOnDismissListener { finishPlayerMenu() }.show()
+    }
+
+    private fun showSubtitleTiming() {
+        var delayMs = model.screen.value.subtitleDelayMs
+        val content = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(32, 16, 32, 8)
+        }
+        val current = android.widget.TextView(this).apply {
+            textSize = 18f
+            setTextColor(android.graphics.Color.WHITE)
+        }
+        fun refresh() {
+            current.text = "Current: ${subtitleDelayLabel(delayMs)}\nPositive = later · Negative = earlier\nApply may briefly buffer. This fixes a constant offset, not different cuts or drift."
+        }
+        content.addView(current)
+        fun adjustment(label: String, change: Long?) {
+            content.addView(android.widget.Button(this).apply {
+                text = label
+                setOnClickListener {
+                    delayMs = if (change == null) 0 else (delayMs + change).coerceIn(-30_000, 30_000)
+                    refresh()
+                }
+            })
+        }
+        adjustment("Earlier −1.0 s", -1_000)
+        adjustment("Earlier −0.1 s", -100)
+        adjustment("Later +0.1 s", 100)
+        adjustment("Later +1.0 s", 1_000)
+        adjustment("Reset to 0.0 s", null)
+        refresh()
+        AlertDialog.Builder(this).setTitle("Subtitle timing").setView(content)
+            .setPositiveButton("Apply") { _, _ -> model.setSubtitleDelay(delayMs) }
+            .setNegativeButton("Cancel", null)
+            .setOnDismissListener { finishPlayerMenu() }.show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -235,6 +278,7 @@ class MainActivity : ComponentActivity() {
                             if (view.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle).hasFocus()) {
                                 showSubtitles()
                             } else {
+                                leavePlayerActions(view)
                                 view.findViewById<View>(androidx.media3.ui.R.id.exo_settings).performClick()
                             }
                         }
@@ -316,6 +360,7 @@ data class PlaybackScreenState(
     val historyError: String? = null,
     val resumeSelection: CatalogSelection? = null,
     val resumeEntry: WatchEntry? = null,
+    val subtitleDelayMs: Long = 0,
 )
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -329,6 +374,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     private val configurationStore = CatalogConfigurationStore(application)
     private var videoSource: MediaSource? = null
     private var subtitleImport: Job? = null
+    private var externalSubtitleSource: MediaSource? = null
     private val historyStore = WatchHistoryStore(application)
     private val historyReady = CompletableDeferred<Unit>()
     private val historyWrites = Channel<List<WatchEntry>>(Channel.CONFLATED)
@@ -381,7 +427,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
     fun loadSubtitle(uri: Uri) {
         val player = screen.value.player ?: return
-        val video = videoSource ?: return
+        if (videoSource == null) return
         subtitleImport?.cancel()
         subtitleImport = viewModelScope.launch {
             try {
@@ -395,14 +441,11 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                         arrayOf(SubtitleExtractor(DefaultSubtitleParserFactory().create(format), format))
                     },
                 ).createMediaSource(MediaItem.fromUri("memory://external-subtitle"))
-                val position = player.currentPosition
-                val playing = player.playWhenReady
+                externalSubtitleSource = subtitle
                 player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
                     .clearOverridesOfType(C.TRACK_TYPE_TEXT).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                     .setPreferredTextLanguage(null).build()
-                player.setMediaSource(MergingMediaSource(video, subtitle), position)
-                player.prepare()
-                player.playWhenReady = playing
+                prepareSubtitleSource(player)
                 mutableScreen.update { it.copy(error = null) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -410,6 +453,26 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                 mutableScreen.update { it.copy(error = "Unable to load subtitles: ${failure.message ?: "unreadable document"}") }
             }
         }
+    }
+
+    fun setSubtitleDelay(delayMs: Long) {
+        val player = screen.value.player ?: return
+        val bounded = delayMs.coerceIn(-30_000, 30_000)
+        if (bounded == screen.value.subtitleDelayMs) return
+        mutableScreen.update { it.copy(subtitleDelayMs = bounded) }
+        Log.i(PLAYER_TAG, "subtitle_delay_ms=$bounded positionMs=${player.currentPosition}")
+        prepareSubtitleSource(player)
+    }
+
+    private fun prepareSubtitleSource(player: ExoPlayer) {
+        val video = videoSource ?: return
+        val source = externalSubtitleSource?.let { MergingMediaSource(video, it) } ?: video
+        val offset = screen.value.subtitleDelayMs
+        val position = player.currentPosition
+        val playing = player.playWhenReady
+        player.setMediaSource(if (offset == 0L) source else SubtitleOffsetMediaSource(source, offset), position)
+        player.prepare()
+        player.playWhenReady = playing
     }
 
     init {
@@ -589,7 +652,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
                 override fun onPlayerError(error: PlaybackException) {
                     Log.e(PLAYER_TAG, "playback_error code=${error.errorCodeName}", error)
-                    stop("Playback stopped after an error.", "Playback failed: ${error.errorCodeName}. ${error.message.orEmpty()}")
+                    stop("Playback stopped after an error.", playbackErrorMessage(error))
                 }
 
                 override fun onPositionDiscontinuity(
@@ -663,10 +726,11 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         subtitleImport?.cancel()
         subtitleImport = null
         videoSource = null
+        externalSubtitleSource = null
         heartbeat?.cancel()
         heartbeat = null
         val player = screen.value.player
-        mutableScreen.update { it.copy(player = null) }
+        mutableScreen.update { it.copy(player = null, subtitleDelayMs = 0) }
         if (player != null) {
             Log.i(PLAYER_TAG, "release positionMs=${player.currentPosition}")
             player.release()
@@ -796,6 +860,11 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                     Text(if (screen.busy) "Preparing your video…" else "Playback", color = Color.White, fontSize = 22.sp)
                 }
                 screen.notice?.let { Text(it, color = Color(0xFFB8D8FF), fontSize = 16.sp) }
+                if (screen.busy) {
+                    Text(torrent.message, color = Color(0xFFB8D8FF), fontSize = 16.sp)
+                    Text(transferLabel(torrent), color = Color(0xFFD3D9E5), fontSize = 15.sp)
+                    Text(loadLabel(torrent), color = Color(0xFFD3D9E5), fontSize = 15.sp)
+                }
                 (screen.error ?: torrent.error)?.let {
                     Text(it, color = Color(0xFFFFA6A6), fontSize = 16.sp)
                     Text("Return to search and choose another source.", color = Color(0xFFBCC5D7), fontSize = 14.sp)
@@ -850,6 +919,23 @@ private fun VideoSurface(
     onPlayerViewChanged: (PlayerView?) -> Unit,
 ) {
     var controlsVisible by remember(player) { mutableStateOf(true) }
+    var buffering by remember(player) { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
+    var bufferedMs by remember(player) { mutableStateOf(player.totalBufferedDuration) }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                buffering = playbackState == Player.STATE_BUFFERING
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+    LaunchedEffect(player) {
+        while (isActive) {
+            bufferedMs = player.totalBufferedDuration
+            delay(1_000)
+        }
+    }
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -883,21 +969,44 @@ private fun VideoSurface(
                 it.keepScreenOn = false
             },
         )
-        if (controlsVisible || torrent.error != null || subtitleError != null) {
+        if (controlsVisible || buffering || torrent.error != null || subtitleError != null) {
             Column(
                 modifier = Modifier.align(Alignment.TopStart).fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.65f)).padding(horizontal = 30.dp, vertical = 10.dp),
             ) {
                 Text(title, color = Color.White, fontSize = 17.sp, maxLines = 1)
-                Text("${transferLabel(torrent)}  ·  Left/right: seek  ·  OK: pause/play  ·  Up: subtitles  ·  Down: CC/settings buttons  ·  Back: stop", color = Color(0xFFD3D9E5), fontSize = 12.sp)
+                Text("${if (buffering) "Buffering · " else ""}${transferLabel(torrent)} · Buffered ${bufferedMs / 1000} s", color = Color(0xFFD3D9E5), fontSize = 15.sp)
+                if (buffering) Text(loadLabel(torrent), color = Color(0xFFB8D8FF), fontSize = 15.sp)
+                if (controlsVisible) Text("Left/right: seek · OK: pause/play · Up: subtitles/timing · Down: CC/settings · Back: stop", color = Color(0xFFD3D9E5), fontSize = 12.sp)
+                Text("Cache ${formatBytes(torrent.cacheBytes)} / ${formatBytes(torrent.cacheLimitBytes)}", color = Color(0xFFBCC5D7), fontSize = 12.sp)
                 (subtitleError ?: torrent.error)?.let { Text(it, color = Color(0xFFFFA6A6), fontSize = 13.sp) }
             }
         }
     }
 }
 
-private fun transferLabel(state: TorrentState): String =
-    "Cache ${formatBytes(state.cacheBytes)} / ${formatBytes(state.cacheLimitBytes)} · ${state.peers} peers"
+private fun transferLabel(state: TorrentState): String {
+    val progress = if (state.totalBytes > 0) {
+        " · Downloaded ${formatBytes(state.downloadedBytes)} / ${formatBytes(state.totalBytes)} (${(state.downloadedBytes * 100 / state.totalBytes).coerceIn(0, 100)}%)"
+    } else ""
+    return "Download ${formatBytes(state.downloadBytesPerSecond)}/s · ${state.peers} peers$progress"
+}
+
+private fun loadLabel(state: TorrentState): String = when (state.requiredDataStatus) {
+    dev.lumastream.torrent.RequiredDataStatus.DOWNLOADING ->
+        "Loading requested piece · ${state.requiredBlocksLoaded}/${state.requiredBlockCount} blocks · Waiting ${state.requiredWaitMillis / 1000} s"
+    dev.lumastream.torrent.RequiredDataStatus.VERIFYING -> "Verifying requested piece · Waiting ${state.requiredWaitMillis / 1000} s"
+    dev.lumastream.torrent.RequiredDataStatus.WRITING -> "Reading requested piece from storage · Waiting ${state.requiredWaitMillis / 1000} s"
+    dev.lumastream.torrent.RequiredDataStatus.IDLE -> "Preparing playback buffer"
+}
+
+private fun subtitleDelayLabel(delayMs: Long): String = String.format(Locale.US, "%+.1f s", delayMs / 1000.0)
+
+private fun playbackErrorMessage(error: PlaybackException): String {
+    val details = generateSequence<Throwable>(error) { it.cause }
+        .take(8).mapNotNull { it.message?.trim()?.takeIf(String::isNotEmpty) }.distinct().toList()
+    return "Playback failed: ${error.errorCodeName}. ${details.joinToString(" · ")}"
+}
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L * 1024L -> String.format(Locale.US, "%.2f GiB", bytes / (1024.0 * 1024.0 * 1024.0))

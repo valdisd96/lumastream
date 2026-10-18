@@ -20,11 +20,11 @@ import org.libtorrent4j.alerts.Alert
 import org.libtorrent4j.alerts.AlertType
 import org.libtorrent4j.alerts.FileErrorAlert
 import org.libtorrent4j.alerts.MetadataFailedAlert
+import org.libtorrent4j.alerts.PieceFinishedAlert
 import org.libtorrent4j.alerts.TorrentErrorAlert
 import org.libtorrent4j.swig.error_code
 import org.libtorrent4j.swig.bitfield
 import org.libtorrent4j.swig.int_bitfield_map
-import org.libtorrent4j.swig.int64_vector
 import org.libtorrent4j.swig.partial_piece_info_vector
 import org.libtorrent4j.swig.settings_pack
 import org.libtorrent4j.swig.status_flags_t
@@ -37,9 +37,22 @@ import java.io.EOFException
 import java.util.BitSet
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 
 internal data class TorrentSelection(val video: VideoFile, val serial: Long)
-internal data class TorrentSnapshot(val peers: Int, val downloadedBytes: Long, val cacheBytes: Long, val cacheLimit: Long)
+internal data class TorrentSnapshot(
+    val peers: Int,
+    val downloadedBytes: Long,
+    val downloadBytesPerSecond: Long,
+    val cacheBytes: Long,
+    val cacheLimit: Long,
+    val requiredPieceIndex: Int?,
+    val requiredBlocksLoaded: Int,
+    val requiredBlockCount: Int,
+    val requiredWaitMillis: Long,
+    val requiredDataStatus: RequiredDataStatus,
+)
 
 private data class StorageFile(val path: File, val offset: Long, val size: Long)
 
@@ -50,10 +63,10 @@ internal class NativeTorrent(
     private val maximumCacheBytes: Long = 4L * 1024 * 1024 * 1024,
 ) {
     private val lock = Any()
+    private val readLock = ReentrantLock(true)
     private val session = SessionManager(false)
     private val statusFlags = status_flags_t()
     private val downloadQueue = partial_piece_info_vector()
-    private val fileProgress = int64_vector()
     private var handle: TorrentHandle? = null
     private var info: TorrentInfo? = null
     private val failure = AtomicReference<IOException?>()
@@ -61,6 +74,12 @@ internal class NativeTorrent(
     private val flushed = BitSet()
     private var selectionSerial = 0L
     private var selection: TorrentSelection? = null
+    @Volatile private var selectedProgress: SelectedDownloadProgress? = null
+    private var requiredPieceIndex: Int? = null
+    private var requiredBlocksLoaded = 0
+    private var requiredBlockCount = 0
+    private var requiredWaitMillis = 0L
+    private var requiredDataStatus = RequiredDataStatus.IDLE
     private var windowStart = -1
     private var windowEnd = -1
     private var lastDemand = -1
@@ -81,6 +100,7 @@ internal class NativeTorrent(
         override fun types(): IntArray = intArrayOf(
             AlertType.FILE_ERROR.swig(), AlertType.TORRENT_ERROR.swig(),
             AlertType.METADATA_FAILED.swig(), AlertType.FILE_PRIO.swig(),
+            AlertType.PIECE_FINISHED.swig(),
         )
 
         override fun alert(alert: Alert<*>) {
@@ -89,9 +109,10 @@ internal class NativeTorrent(
             // Never acquire lock here: native synchronous calls and stop may wait
             // for this thread. No alert or borrowed native pointer is retained.
             when (alert) {
-                is FileErrorAlert -> recordFailure("Torrent disk error: ${alert.error().message} (${alert.filename()})")
-                is TorrentErrorAlert -> recordFailure("Torrent error: ${alert.error().message}")
-                is MetadataFailedAlert -> recordFailure("Invalid torrent metadata: ${alert.error.message}")
+                is FileErrorAlert -> recordFailure(IOException("Torrent disk error: ${alert.error().message} (${alert.filename()})"))
+                is TorrentErrorAlert -> recordFailure(IOException("Torrent error: ${alert.error().message}"))
+                is MetadataFailedAlert -> recordFailure(IOException("Invalid torrent metadata: ${alert.error.message}"))
+                is PieceFinishedAlert -> selectedProgress?.record(alert.pieceIndex())
                 else -> when (alert.type()) {
                     AlertType.FILE_PRIO -> priorityEvents.incrementAndGet()
                     else -> Unit
@@ -224,6 +245,8 @@ internal class NativeTorrent(
             reader?.close()
             reader = null
             selection = null
+            selectedProgress = null
+            clearRequiredData()
             windowStart = -1
             windowEnd = -1
             lastDemand = -1
@@ -253,6 +276,23 @@ internal class NativeTorrent(
             current.prioritizePieces(Priority.array(Priority.IGNORE, info!!.numPieces()))
             flushed.clear()
             selection = chosen
+            val progress = SelectedDownloadProgress(chosen.video.torrentOffset, chosen.video.file.size, pieceLength)
+            selectedProgress = progress
+            val status = current.status(TorrentHandle.QUERY_PIECES)
+            try {
+                val pieces = status.pieces()
+                try {
+                    val first = (chosen.video.torrentOffset / pieceLength).toInt()
+                    val last = ((chosen.video.torrentOffset + chosen.video.file.size - 1) / pieceLength).toInt()
+                    for (piece in first..minOf(last, pieces.size() - 1)) {
+                        if (pieces.getBit(piece)) progress.record(piece)
+                    }
+                } finally {
+                    pieces.swig().delete()
+                }
+            } finally {
+                status.swig().delete()
+            }
             current.unsetFlags(TorrentFlags.UPLOAD_MODE)
             current.resume()
         }
@@ -264,7 +304,7 @@ internal class NativeTorrent(
         if (selection?.serial != chosen.serial) throw InterruptedIOException("Torrent file selection changed")
     }
 
-    fun demand(chosen: TorrentSelection, filePosition: Long) = synchronized(lock) {
+    private fun demand(chosen: TorrentSelection, filePosition: Long) = synchronized(lock) {
         ensureSelection(chosen)
         if (filePosition == chosen.video.file.size) return@synchronized
         val piece = ((chosen.video.torrentOffset + filePosition) / pieceLength).toInt()
@@ -371,22 +411,38 @@ internal class NativeTorrent(
     }
 
     fun read(chosen: TorrentSelection, position: Long, buffer: ByteArray, offset: Int, count: Int, cancelled: () -> Boolean): Int {
-        val piece = ((chosen.video.torrentOffset + position) / pieceLength).toInt()
-        while (true) {
-            demand(chosen, position)
-            awaitReadable(chosen, piece, cancelled)
-            synchronized(lock) {
-                ensureSelection(chosen)
-                if (cancelled() || Thread.currentThread().isInterrupted) throw InterruptedIOException("Torrent read cancelled")
-                // Another reader may have moved the window while awaitReadable released lock.
-                if (flushed[piece]) {
-                    val input = reader ?: RandomAccessFile(chosen.video.path, "r").also { reader = it }
-                    input.seek(position)
-                    val bytes = input.read(buffer, offset, count)
-                    if (bytes < 0) throw EOFException("Verified torrent piece is missing from disk")
-                    return bytes
+        val startedAt = SystemClock.elapsedRealtime()
+        // An overlapping extractor must not demote the piece another reader is
+        // waiting for. Opens are side-effect free; only this lock owner demands.
+        try {
+            while (true) {
+                checkReadCancelled(cancelled)
+                if (readLock.tryLock(40, TimeUnit.MILLISECONDS)) break
+                if (SystemClock.elapsedRealtime() - startedAt >= PieceReadWait.MAX_WAIT_MILLIS) {
+                    throw IOException("Timed out waiting for another torrent reader to finish")
                 }
             }
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw InterruptedIOException("Torrent read cancelled").apply { initCause(interrupted) }
+        }
+        try {
+            checkReadCancelled(cancelled)
+            demand(chosen, position)
+            val piece = ((chosen.video.torrentOffset + position) / pieceLength).toInt()
+            awaitReadable(chosen, piece, startedAt, cancelled)
+            return synchronized(lock) {
+                ensureSelection(chosen)
+                checkReadCancelled(cancelled)
+                val input = reader ?: RandomAccessFile(chosen.video.path, "r").also { reader = it }
+                input.seek(position)
+                val bytes = input.read(buffer, offset, count)
+                if (bytes < 0) throw EOFException("Verified torrent piece $piece is missing from disk at video byte $position")
+                bytes
+            }
+        } finally {
+            synchronized(lock) { clearRequiredData() }
+            readLock.unlock()
         }
     }
 
@@ -398,53 +454,101 @@ internal class NativeTorrent(
         return bytes + storageOverhead
     }
 
-    private fun awaitReadable(chosen: TorrentSelection, piece: Int, cancelled: () -> Boolean) {
-        val deadline = SystemClock.elapsedRealtime() + 90_000
+    private fun awaitReadable(chosen: TorrentSelection, piece: Int, startedAt: Long, cancelled: () -> Boolean) {
+        // Most reads stay within an already verified/flushed piece: no queue
+        // snapshot or per-read wait tracker is needed on that hot path.
+        synchronized(lock) {
+            ensureSelection(chosen)
+            if (flushed[piece]) return
+        }
+        val wait = PieceReadWait(startedAt)
         while (true) {
-            if (cancelled() || Thread.currentThread().isInterrupted) throw InterruptedIOException("Torrent read cancelled")
-            val ready = synchronized(lock) {
+            checkReadCancelled(cancelled)
+            synchronized(lock) {
                 ensureSelection(chosen)
                 val current = requireHandle()
-                if (flushed[piece]) {
-                    true
-                } else if (!current.havePiece(piece)) {
-                    false
-                } else {
-                    // In libtorrent 2.1, havePiece may become true while disk
-                    // writes are pending. The download queue retains those
-                    // pieces until every block is written; the picker is only
-                    // freed for a seed after maybe_done_flushing completes.
-                    current.swig().get_download_queue(downloadQueue)
-                    var written = true
-                    for (index in 0 until downloadQueue.size) {
-                        val partial = downloadQueue[index]
-                        try {
-                            if (partial.piece_index == piece &&
-                                (partial.writing != 0 || partial.finished != partial.blocks_in_piece)
-                            ) written = false
-                        } finally {
-                            partial.delete()
+                val verified = current.havePiece(piece)
+                var total = (info!!.pieceSize(piece) + 16_383) / 16_384
+                var loaded = 0
+                var written = 0
+                var queued = false
+                current.swig().get_download_queue(downloadQueue)
+                for (index in 0 until downloadQueue.size) {
+                    val partial = downloadQueue[index]
+                    try {
+                        if (partial.piece_index == piece) {
+                            total = partial.blocks_in_piece
+                            loaded = partial.finished + partial.writing
+                            written = partial.finished
+                            queued = true
+                            break
                         }
+                    } finally {
+                        partial.delete()
                     }
-                    if (written && current.havePiece(piece)) {
-                        flushed.set(piece)
-                        true
-                    } else false
+                }
+                // havePiece alone is insufficient: successful hash verification
+                // may precede completion of outstanding native disk writes.
+                if (verified && (!queued || written == total) && current.havePiece(piece)) {
+                    flushed.set(piece)
+                    selectedProgress?.record(piece)
+                    return
+                }
+                val now = SystemClock.elapsedRealtime()
+                wait.observe(now, loaded, written, verified)
+                requiredPieceIndex = piece
+                requiredBlocksLoaded = loaded.coerceIn(0, total)
+                requiredBlockCount = total
+                requiredWaitMillis = wait.elapsedMillis(now)
+                requiredDataStatus = when {
+                    verified || (loaded == total && written < total) -> RequiredDataStatus.WRITING
+                    loaded == total -> RequiredDataStatus.VERIFYING
+                    else -> RequiredDataStatus.DOWNLOADING
+                }
+                if (wait.expired(now)) {
+                    val status = current.status(statusFlags)
+                    val peers: Int
+                    val seeds: Int
+                    try {
+                        peers = status.numPeers()
+                        seeds = status.numSeeds()
+                    } finally {
+                        status.swig().delete()
+                    }
+                    val advice = when (requiredDataStatus) {
+                        RequiredDataStatus.WRITING -> "Disk writes did not finish; check free space and device storage."
+                        RequiredDataStatus.VERIFYING -> "Piece verification did not finish; try another source."
+                        else -> "The source did not supply the required data; check connectivity or choose another source."
+                    }
+                    throw TorrentReadTimeoutException(
+                        "Torrent piece ${piece + 1} timed out: $loaded/$total blocks received, $written written, " +
+                            "${wait.elapsedMillis(now) / 1000}s waiting (${wait.stalledMillis(now) / 1000}s without progress), " +
+                            "$peers peers / $seeds seeds. $advice",
+                        requiredDataStatus == RequiredDataStatus.DOWNLOADING,
+                    )
                 }
             }
-            if (ready) return
-            if (SystemClock.elapsedRealtime() >= deadline) {
-                val error = IOException("Torrent buffering timed out after 90 seconds at piece $piece; no usable peer data or disk completion")
-                fail(error.message!!)
-                throw error
-            }
             try {
-                Thread.sleep(40)
+                Thread.sleep(100)
             } catch (interrupted: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw InterruptedIOException("Torrent read cancelled").apply { initCause(interrupted) }
             }
         }
+    }
+
+    private fun checkReadCancelled(cancelled: () -> Boolean) {
+        if (cancelled() || invalidated || Thread.currentThread().isInterrupted) {
+            throw InterruptedIOException("Torrent read cancelled")
+        }
+    }
+
+    private fun clearRequiredData() {
+        requiredPieceIndex = null
+        requiredBlocksLoaded = 0
+        requiredBlockCount = 0
+        requiredWaitMillis = 0
+        requiredDataStatus = RequiredDataStatus.IDLE
     }
 
     fun snapshot(): TorrentSnapshot = synchronized(lock) {
@@ -455,25 +559,29 @@ internal class NativeTorrent(
             val error = status.errorCode()
             if (error.value != 0) throw IOException("Torrent error: ${error.message}")
             if (selection != null) checkDiskReserve()
-            val done = selection?.let { downloadedBytes(current, it.video.file.index) } ?: 0L
+            val done = selectedProgress?.downloadedBytes() ?: 0L
             val allocated = allocatedBytes()
             if (selection != null && allocated > cacheLimit) throw IOException("Torrent cache exceeded its disk limit")
-            TorrentSnapshot(status.numPeers(), done, allocated, cacheLimit)
+            TorrentSnapshot(
+                status.numPeers(), done, status.downloadPayloadRate().toLong().coerceAtLeast(0), allocated, cacheLimit,
+                requiredPieceIndex, requiredBlocksLoaded, requiredBlockCount, requiredWaitMillis, requiredDataStatus,
+            )
         } finally {
             status.swig().delete()
         }
     }
 
-    fun fail(message: String) {
-        recordFailure(message)
+    fun fail(error: IOException) {
+        recordFailure(error)
         synchronized(lock) {
             if (!stopped) handle?.pause()
         }
     }
 
-    private fun recordFailure(message: String) {
-        if (failure.compareAndSet(null, IOException(message))) {
-            Log.e(TORRENT_TAG, message)
+    private fun recordFailure(error: IOException) {
+        if (failure.compareAndSet(null, error)) {
+            val message = error.message ?: "Torrent IO failed"
+            Log.e(TORRENT_TAG, message, error)
             onFailure(this, message)
         }
     }
@@ -514,7 +622,6 @@ internal class NativeTorrent(
                     session.removeListener(listener)
                     statusFlags.delete()
                     downloadQueue.delete()
-                    fileProgress.delete()
                 }
             }
             closeFailure?.let { throw it }
@@ -532,10 +639,6 @@ internal class NativeTorrent(
         }
     }
 
-    private fun downloadedBytes(current: TorrentHandle, index: Int): Long {
-        current.swig().file_progress(fileProgress, TorrentHandle.PIECE_GRANULARITY)
-        return fileProgress[index]
-    }
 
     private fun checkDiskReserve() {
         if (StatFs(directory.path).availableBytes < DISK_RESERVE + LOOKAHEAD_BYTES + 2L * pieceLength) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Separated actual torrent download speed, unique verified-video progress, required-piece loading stages and Media3 buffered time from rolling-cache usage; playback status hides with the controls.
+- Made demanded-piece waits progress-aware with a finite hard cap, serialized overlapping readers' demand/wait/read operations, and preserved underlying network/disk source errors.
+- Added Choose episode to series history cards, with season/episode/source navigation and Back returning to the originating Home card.
+- Restored playing-state control auto-hide after opening/dismissing subtitle and settings menus.
+- Added remote subtitle timing adjustment for supported embedded and imported subtitles: ±0.1/1-second steps, ±30-second range, reset, and media-clock timing across seeks. Applying retains position/play state but may briefly buffer; constant offsets do not fix different edits or progressive drift.
+
 ## 0.1.0 — 2026-10-18 (pre-release)
 
 - Published the first signed ARMv7 APK for Android TV 9+, with a SHA-256 checksum and a persistent release certificate; documented local signing, installation, debug-to-release migration, and key-backup requirements.

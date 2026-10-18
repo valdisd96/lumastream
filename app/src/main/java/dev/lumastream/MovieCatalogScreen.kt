@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -190,7 +191,7 @@ private class MovieCatalogViewModel : ViewModel() {
         mutableState.update {
             it.copy(route = CatalogRoute.RESULTS, page = page, titles = emptyList(), hasMore = false,
                 searched = false, selected = null, details = null, season = null, episodes = emptyList(),
-                episodesLoaded = false, episode = null, sources = null)
+                episodesLoaded = false, episode = null, sources = null, historySources = false)
         }
         val current = state.value
         load {
@@ -205,7 +206,7 @@ private class MovieCatalogViewModel : ViewModel() {
         mutableState.update {
             it.copy(route = CatalogRoute.DETAILS, selected = title, details = null, season = null,
                 episodes = emptyList(), episodesLoaded = false, episode = null, sources = null,
-                error = null, focusEpoch = it.focusEpoch + 1)
+                historySources = false, error = null, focusEpoch = it.focusEpoch + 1)
         }
         loadDetails()
     }
@@ -221,7 +222,7 @@ private class MovieCatalogViewModel : ViewModel() {
         cancel()
         mutableState.update {
             it.copy(route = CatalogRoute.EPISODES, season = number, episodes = emptyList(), episodesLoaded = false,
-                episode = null, sources = null, error = null, focusEpoch = it.focusEpoch + 1)
+                episode = null, sources = null, historySources = false, error = null, focusEpoch = it.focusEpoch + 1)
         }
         loadEpisodes()
     }
@@ -239,7 +240,7 @@ private class MovieCatalogViewModel : ViewModel() {
         cancel()
         mutableState.update {
             it.copy(route = CatalogRoute.SOURCES, episode = episode, sources = null,
-                error = null, focusEpoch = it.focusEpoch + 1)
+                historySources = false, error = null, focusEpoch = it.focusEpoch + 1)
         }
         loadSources()
     }
@@ -333,6 +334,7 @@ fun MovieCatalogScreen(
     var keyboardWasVisible by remember { mutableStateOf(false) }
     var homeFocusPending by remember { mutableStateOf(true) }
     var pendingResultFocus by remember { mutableStateOf<String?>(null) }
+    var pendingHistoryFocus by remember { mutableStateOf<String?>(null) }
     val latestHistory = remember(history) {
         history.sortedByDescending { it.updatedAtMs }.distinctBy { it.titleKey }
     }
@@ -393,7 +395,14 @@ fun MovieCatalogScreen(
     LaunchedEffect(state.route, state.focusEpoch) {
         dismissInput()
         pendingResultFocus = null
-        homeFocusPending = state.route == CatalogRoute.RESULTS && state.titles.isEmpty()
+        pendingHistoryFocus = if (state.route == CatalogRoute.RESULTS && !state.searched) {
+            latestHistory.firstOrNull {
+                it.selection.details.title.id == state.selected?.id &&
+                    it.selection.details.title.kind == state.selected?.kind
+            }?.titleKey
+        } else null
+        homeFocusPending = state.route == CatalogRoute.RESULTS && state.titles.isEmpty() &&
+            pendingHistoryFocus == null
         if (state.route == CatalogRoute.RESULTS && state.titles.isNotEmpty()) {
             val index = state.titles.indexOfFirst { it.id == state.selected?.id && it.kind == state.selected?.kind }
                 .coerceAtLeast(0)
@@ -424,6 +433,11 @@ fun MovieCatalogScreen(
                 dismissInput()
                 model.findHistorySources(entry.selection)
             },
+            onChooseEpisode = {
+                resumeEntry = null
+                dismissInput()
+                model.select(entry.selection.details.title)
+            },
         )
     }
     Column(
@@ -440,7 +454,8 @@ fun MovieCatalogScreen(
             if (state.route != CatalogRoute.RESULTS) {
                 CatalogButton(
                     when (state.route) {
-                        CatalogRoute.RESULTS, CatalogRoute.DETAILS -> "Back to results"
+                        CatalogRoute.RESULTS -> "Back to results"
+                        CatalogRoute.DETAILS -> if (state.searched) "Back to results" else "Back to Home"
                         CatalogRoute.EPISODES -> "Back to seasons"
                         CatalogRoute.SOURCES -> when {
                             state.historySources -> "Back to Home"
@@ -610,7 +625,12 @@ fun MovieCatalogScreen(
                         }
                     }
                 } else if (showHistory) {
-                    CatalogHistoryRow(latestHistory, Modifier.weight(1f).fillMaxWidth()) { entry, requester ->
+                    CatalogHistoryRow(
+                        latestHistory,
+                        Modifier.weight(1f).fillMaxWidth(),
+                        pendingFocus = pendingHistoryFocus,
+                        onFocusRestored = { pendingHistoryFocus = null },
+                    ) { entry, requester ->
                         historyFocus = requester
                         resumeEntry = entry
                     }
@@ -640,19 +660,34 @@ fun MovieCatalogScreen(
 private fun CatalogHistoryRow(
     entries: List<WatchEntry>,
     modifier: Modifier,
+    pendingFocus: String?,
+    onFocusRestored: () -> Unit,
     select: (WatchEntry, FocusRequester) -> Unit,
 ) {
+    val scroll = rememberLazyListState()
+    LaunchedEffect(pendingFocus) {
+        val index = entries.indexOfFirst { it.titleKey == pendingFocus }
+        if (index >= 0) scroll.scrollToItem(index)
+    }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Continue watching · Watched", color = Color.White, fontSize = 22.sp)
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val posterHeight = (maxHeight - 128.dp).coerceIn(32.dp, 160.dp)
             LazyRow(
                 modifier = Modifier.fillMaxSize(),
+                state = scroll,
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
             ) {
                 items(entries, key = { it.titleKey }) { entry ->
                     val requester = remember { FocusRequester() }
+                    LaunchedEffect(pendingFocus) {
+                        if (pendingFocus == entry.titleKey) {
+                            withFrameNanos { }
+                            requester.requestFocus()
+                            onFocusRestored()
+                        }
+                    }
                     val title = entry.selection.details.title
                     CatalogTile(
                         Modifier.width(188.dp).focusRequester(requester),
@@ -696,6 +731,7 @@ private fun CatalogResumeDialog(
     onDismiss: () -> Unit,
     onResume: (Boolean) -> Unit,
     onChooseSource: () -> Unit,
+    onChooseEpisode: () -> Unit,
 ) {
     val initialFocus = remember { FocusRequester() }
     Dialog(onDismissRequest = onDismiss) {
@@ -724,6 +760,9 @@ private fun CatalogResumeDialog(
                         onResume(false)
                     }
                 }
+            }
+            if (entry.selection.details.title.kind == MediaKind.SERIES) {
+                item { CatalogButton("Choose episode", Modifier.fillMaxWidth(), onClick = onChooseEpisode) }
             }
             item {
                 CatalogButton("Start from beginning", Modifier.fillMaxWidth().then(

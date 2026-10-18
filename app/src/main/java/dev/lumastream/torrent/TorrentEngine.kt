@@ -91,7 +91,13 @@ class TorrentEngine(context: Context) : Closeable {
                         }
                         val torrent = NativeTorrent(directory, onFailure = { owner, message ->
                             if (active === owner && !owner.invalidated) {
-                                mutableState.update { it.copy(message = "Torrent error", error = message) }
+                                mutableState.update {
+                                    it.copy(
+                                        message = "Torrent error", error = message, downloadBytesPerSecond = 0,
+                                        requiredPieceIndex = null, requiredBlocksLoaded = 0, requiredBlockCount = 0,
+                                        requiredWaitMillis = 0, requiredDataStatus = RequiredDataStatus.IDLE,
+                                    )
+                                }
                             }
                         })
                         active = torrent
@@ -153,6 +159,12 @@ class TorrentEngine(context: Context) : Closeable {
                     message = "Buffering ${selection.video.file.name}",
                     totalBytes = selection.video.file.size,
                     downloadedBytes = 0,
+                    downloadBytesPerSecond = 0,
+                    requiredPieceIndex = null,
+                    requiredBlocksLoaded = 0,
+                    requiredBlockCount = 0,
+                    requiredWaitMillis = 0,
+                    requiredDataStatus = RequiredDataStatus.IDLE,
                     error = null,
                 )
                 Log.i(TORRENT_TAG, "Selection: index=$index, bytes=${selection.video.file.size}, offset=${selection.video.torrentOffset}")
@@ -162,7 +174,7 @@ class TorrentEngine(context: Context) : Closeable {
                 withContext(NonCancellable) { disposeActive() }
                 throw failure
             } catch (failure: Throwable) {
-                torrent.fail(failure.message ?: "Unable to select video")
+                torrent.fail(failure as? IOException ?: IOException("Unable to select video", failure))
                 throw failure
             }
         }
@@ -237,13 +249,23 @@ class TorrentEngine(context: Context) : Closeable {
                 val snapshot = torrent.snapshot()
                 if (active === torrent && !torrent.invalidated) {
                     mutableState.update {
-                        it.copy(peers = snapshot.peers, downloadedBytes = snapshot.downloadedBytes,
-                            cacheBytes = snapshot.cacheBytes, cacheLimitBytes = snapshot.cacheLimit)
+                        if (it.error != null) it else it.copy(
+                            peers = snapshot.peers,
+                            downloadedBytes = snapshot.downloadedBytes,
+                            downloadBytesPerSecond = snapshot.downloadBytesPerSecond,
+                            cacheBytes = snapshot.cacheBytes,
+                            cacheLimitBytes = snapshot.cacheLimit,
+                            requiredPieceIndex = snapshot.requiredPieceIndex,
+                            requiredBlocksLoaded = snapshot.requiredBlocksLoaded,
+                            requiredBlockCount = snapshot.requiredBlockCount,
+                            requiredWaitMillis = snapshot.requiredWaitMillis,
+                            requiredDataStatus = snapshot.requiredDataStatus,
+                        )
                     }
                 }
             } catch (failure: Exception) {
                 if (torrent.invalidated) return
-                torrent.fail(failure.message ?: "Torrent session failed")
+                torrent.fail(failure as? IOException ?: IOException("Torrent session failed", failure))
                 return
             }
             delay(1000)
