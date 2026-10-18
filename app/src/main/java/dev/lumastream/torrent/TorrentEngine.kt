@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -168,7 +169,11 @@ class TorrentEngine(context: Context) : Closeable {
                     error = null,
                 )
                 Log.i(TORRENT_TAG, "Selection: index=$index, bytes=${selection.video.file.size}, offset=${selection.video.torrentOffset}")
-                TorrentPlayback(DataSource.Factory { TorrentDataSource(torrent, selection, uri) }, uri, selection.video.file.name)
+                TorrentPlayback(
+                    DataSource.Factory { TorrentDataSource(torrent, selection, uri) },
+                    uri, selection.video.file.name, torrent.videoIdentity(selection),
+                    selection.video.file, torrent.subtitleCandidates(selection), selection.serial,
+                )
             } catch (failure: CancellationException) {
                 // A cancelled selection may have changed asynchronous native priorities.
                 withContext(NonCancellable) { disposeActive() }
@@ -179,6 +184,36 @@ class TorrentEngine(context: Context) : Closeable {
             }
         }
     }
+
+    /** Reads a discovered sidecar without selecting it as the playback file. */
+    suspend fun readSubtitle(playback: TorrentPlayback, candidate: TorrentSubtitleCandidate): ByteArray =
+        withContext(Dispatchers.IO) {
+            val coroutine = currentCoroutineContext()
+            coroutine.ensureActive()
+            val torrent = active ?: throw IOException("Open a torrent first")
+            try {
+                val bytes = torrent.readSubtitle(playback, candidate) { !coroutine.isActive }
+                if (active !== torrent) throw CancellationException("Torrent replaced")
+                bytes
+            } finally {
+                coroutine.ensureActive()
+            }
+        }
+
+    /** Optional, bounded IO; callers must invoke this only for an explicit external search. */
+    suspend fun readMovieHashSample(playback: TorrentPlayback): TorrentMovieHashSample =
+        withContext(Dispatchers.IO) {
+            val coroutine = currentCoroutineContext()
+            coroutine.ensureActive()
+            val torrent = active ?: throw IOException("Open a torrent first")
+            try {
+                val sample = torrent.readMovieHashSample(playback) { !coroutine.isActive }
+                if (active !== torrent) throw CancellationException("Torrent replaced")
+                sample
+            } finally {
+                coroutine.ensureActive()
+            }
+        }
 
     suspend fun stop() {
         val ticket = synchronized(requests) {

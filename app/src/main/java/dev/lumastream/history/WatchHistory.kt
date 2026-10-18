@@ -93,6 +93,7 @@ private fun CatalogSelection.toJson(): JSONObject = JSONObject()
             .put("kind", details.title.kind.name)
             .put("title", details.title.title)
             .put("originalTitle", details.title.originalTitle)
+            .put("originalLanguage", details.title.originalLanguage ?: JSONObject.NULL)
             .put("year", details.title.year)
             .put("overview", details.title.overview)
             .put("posterPath", details.title.posterPath ?: JSONObject.NULL)
@@ -138,6 +139,7 @@ private fun JSONObject.toSelection(): CatalogSelection {
                 title = title.getString("title"), originalTitle = title.getString("originalTitle"),
                 year = title.getString("year"), overview = title.getString("overview"),
                 posterPath = title.nullableString("posterPath"), backdropPath = title.nullableString("backdropPath"),
+                originalLanguage = if (title.isNull("originalLanguage")) null else title.getString("originalLanguage"),
             ),
             imdbId = details.nullableString("imdbId"),
             seasons = List(seasons.length()) {

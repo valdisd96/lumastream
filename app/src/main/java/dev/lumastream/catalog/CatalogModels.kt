@@ -15,6 +15,7 @@ data class CatalogTitle(
     val overview: String,
     val posterPath: String?,
     val backdropPath: String?,
+    val originalLanguage: String? = null,
 )
 
 data class CatalogPage(val items: List<CatalogTitle>, val page: Int, val hasMore: Boolean)

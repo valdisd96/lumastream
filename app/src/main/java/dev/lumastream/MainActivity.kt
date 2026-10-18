@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
@@ -79,21 +80,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import android.app.AlertDialog
 import androidx.media3.common.C
-import androidx.media3.common.TrackSelectionOverride
-import androidx.media3.datasource.ByteArrayDataSource
-import androidx.media3.datasource.DataSource
-import androidx.media3.exoplayer.source.MediaSource
-import androidx.media3.exoplayer.source.MergingMediaSource
-import androidx.media3.common.Format
-import androidx.media3.extractor.ExtractorsFactory
-import androidx.media3.extractor.text.DefaultSubtitleParserFactory
-import androidx.media3.extractor.text.SubtitleExtractor
 import dev.lumastream.history.WatchEntry
 import dev.lumastream.history.WatchHistoryStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import dev.lumastream.subtitle.ProviderSubtitle
+import dev.lumastream.torrent.TorrentSubtitleCandidate
 
 private const val PLAYER_TAG = "LumaPlayer"
 
@@ -103,6 +97,7 @@ class MainActivity : ComponentActivity() {
     private var activePlayerView: PlayerView? = null
     private var navigatingPlayerActions = false
     private var focusedPlayerAction = androidx.media3.ui.R.id.exo_settings
+    private var subtitleSearch: Job? = null
     private val playerActionsListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             val view = activePlayerView ?: return
@@ -154,15 +149,17 @@ class MainActivity : ComponentActivity() {
         finishPlayerMenu()
         val tracks = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
             .flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
-        val labels = listOf("Off", "Choose external SRT / VTT…", "Load HTTPS subtitle URL…", "Subtitle timing (${subtitleDelayLabel(model.screen.value.subtitleDelayMs)})…") + tracks.map { (group, index) ->
+        val labels = listOf("Off", "Choose external SRT / VTT…", "Load HTTPS subtitle URL…",
+            "Subtitle timing (${subtitleDelayLabel(model.screen.value.subtitleDelayMs)})…",
+            "Subtitles in this torrent (${model.torrentSubtitles().size})…",
+            "Find subtitles online (${model.screen.value.configuration.subtitleLanguage})…") + tracks.map { (group, index) ->
             val format = group.getTrackFormat(index)
             val name = format.label ?: format.language ?: "Subtitle ${index + 1}"
             if (group.isTrackSelected(index)) "$name (selected)" else name
         }
         AlertDialog.Builder(this).setTitle("Subtitles").setItems(labels.toTypedArray()) { _, choice ->
             when (choice) {
-                0 -> player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                0 -> model.selectSubtitle(null)
                 1 -> {
                     player.pause()
                     try {
@@ -185,14 +182,93 @@ class MainActivity : ComponentActivity() {
                         .setNegativeButton("Cancel", null).setOnDismissListener { finishPlayerMenu() }.show()
                 }
                 3 -> showSubtitleTiming()
+                4 -> showTorrentSubtitles()
+                5 -> showOnlineSubtitles()
                 else -> {
-                    val (group, index) = tracks[choice - 4]
-                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                        .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index)).build()
+                    val (group, index) = tracks[choice - 6]
+                    model.selectSubtitle(group, index)
                 }
             }
         }.setNegativeButton("Cancel", null).setOnDismissListener { finishPlayerMenu() }.show()
+    }
+
+    private fun showTorrentSubtitles() {
+        val candidates = model.torrentSubtitles()
+        if (candidates.isEmpty()) {
+            AlertDialog.Builder(this).setTitle("Torrent subtitles")
+                .setMessage("No matching SRT / WebVTT files were found for this video. Try Find subtitles online.")
+                .setPositiveButton("OK", null).setOnDismissListener { finishPlayerMenu() }.show()
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Torrent subtitles")
+            .setItems(candidates.map { "${it.language ?: "Unknown language"} · ${it.name}" }.toTypedArray()) { _, index ->
+                model.loadTorrentSubtitle(candidates[index])
+            }.setNegativeButton("Cancel", null).setOnDismissListener { finishPlayerMenu() }.show()
+    }
+
+    private fun onlineSubtitleDialog(title: String): AlertDialog.Builder {
+        val heading = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(32, 24, 32, 8)
+            addView(android.widget.TextView(this@MainActivity).apply {
+                text = title
+                textSize = 20f
+                setTextColor(android.graphics.Color.WHITE)
+            })
+            addView(android.widget.Button(this@MainActivity).apply {
+                text = "Subtitles provided by OpenSubtitles.com"
+                textSize = 14f
+                setOnClickListener {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.opensubtitles.com")))
+                    } catch (_: ActivityNotFoundException) {
+                        AlertDialog.Builder(this@MainActivity).setMessage("Visit https://www.opensubtitles.com")
+                            .setPositiveButton("OK", null).show()
+                    }
+                }
+            })
+        }
+        return AlertDialog.Builder(this).setCustomTitle(heading)
+    }
+
+    private fun showOnlineSubtitles() {
+        val player = model.screen.value.player ?: return
+        subtitleSearch?.cancel()
+        val progress = onlineSubtitleDialog("Find subtitles")
+            .setMessage("Searching the selected language for this video/release…")
+            .setNegativeButton("Cancel") { _, _ -> subtitleSearch?.cancel() }
+            .setOnCancelListener { subtitleSearch?.cancel() }.create()
+        progress.setOnDismissListener { finishPlayerMenu() }
+        progress.show()
+        subtitleSearch = lifecycleScope.launch {
+            try {
+                val results = model.findOnlineSubtitles()
+                if (model.screen.value.player !== player || isFinishing || isDestroyed) return@launch
+                progress.dismiss()
+                if (results.isEmpty()) {
+                    onlineSubtitleDialog("No matches")
+                        .setMessage("No matching subtitles in the selected language. No other language was substituted.")
+                        .setPositiveButton("OK", null).setOnDismissListener { finishPlayerMenu() }.show()
+                } else {
+                    onlineSubtitleDialog("Choose subtitles · ${results.size} matches")
+                        .setItems(results.map {
+                            "${if (it.hashMatch) "Exact video hash · " else ""}${it.release}\n${it.filename}${if (it.hearingImpaired) " · SDH" else ""}${it.fps?.let { fps -> " · $fps fps" } ?: ""}"
+                        }.toTypedArray()) { _, index ->
+                            if (model.screen.value.player === player) model.loadOnlineSubtitle(results[index])
+                        }.setNegativeButton("Cancel", null).setOnDismissListener { finishPlayerMenu() }.show()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (model.screen.value.player === player && !isFinishing && !isDestroyed) {
+                    onlineSubtitleDialog("Subtitle search")
+                        .setMessage(failure.message ?: "Search failed. Try again later.")
+                        .setPositiveButton("OK", null).setOnDismissListener { finishPlayerMenu() }.show()
+                }
+            } finally {
+                progress.dismiss()
+            }
+        }
     }
 
     private fun showSubtitleTiming() {
@@ -334,6 +410,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        subtitleSearch?.cancel()
+        subtitleSearch = null
         // A document picker temporarily covers playback; keep the paused session until its result.
         if (!choosingSubtitle) {
             activePlayerView = null
@@ -361,6 +439,7 @@ data class PlaybackScreenState(
     val resumeSelection: CatalogSelection? = null,
     val resumeEntry: WatchEntry? = null,
     val subtitleDelayMs: Long = 0,
+    val subtitleMessage: String? = null,
 )
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -372,9 +451,12 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     private var command: Job? = null
     private var heartbeat: Job? = null
     private val configurationStore = CatalogConfigurationStore(application)
-    private var videoSource: MediaSource? = null
-    private var subtitleImport: Job? = null
-    private var externalSubtitleSource: MediaSource? = null
+    private val configurationReady = CompletableDeferred<Unit>()
+    private val subtitles = PlaybackSubtitles(application, engine, viewModelScope,
+        onDelay = { value -> mutableScreen.update { it.copy(subtitleDelayMs = value) } },
+        onMessage = { value -> mutableScreen.update { it.copy(subtitleMessage = value) } },
+        onError = { value -> mutableScreen.update { it.copy(error = value) } },
+    )
     private val historyStore = WatchHistoryStore(application)
     private val historyReady = CompletableDeferred<Unit>()
     private val historyWrites = Channel<List<WatchEntry>>(Channel.CONFLATED)
@@ -425,55 +507,13 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         openCatalog(entry.selection, if (startOver || entry.completed) 0 else entry.positionMs)
     }
 
-    fun loadSubtitle(uri: Uri) {
-        val player = screen.value.player ?: return
-        if (videoSource == null) return
-        subtitleImport?.cancel()
-        subtitleImport = viewModelScope.launch {
-            try {
-                val imported = importSubtitle(getApplication(), uri)
-                if (screen.value.player !== player) return@launch
-                val format = Format.Builder().setSampleMimeType(imported.mimeType)
-                    .setLabel("External subtitles").setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()
-                val subtitle = ProgressiveMediaSource.Factory(
-                    DataSource.Factory { ByteArrayDataSource(imported.bytes) },
-                    ExtractorsFactory {
-                        arrayOf(SubtitleExtractor(DefaultSubtitleParserFactory().create(format), format))
-                    },
-                ).createMediaSource(MediaItem.fromUri("memory://external-subtitle"))
-                externalSubtitleSource = subtitle
-                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                    .clearOverridesOfType(C.TRACK_TYPE_TEXT).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                    .setPreferredTextLanguage(null).build()
-                prepareSubtitleSource(player)
-                mutableScreen.update { it.copy(error = null) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                mutableScreen.update { it.copy(error = "Unable to load subtitles: ${failure.message ?: "unreadable document"}") }
-            }
-        }
-    }
-
-    fun setSubtitleDelay(delayMs: Long) {
-        val player = screen.value.player ?: return
-        val bounded = delayMs.coerceIn(-30_000, 30_000)
-        if (bounded == screen.value.subtitleDelayMs) return
-        mutableScreen.update { it.copy(subtitleDelayMs = bounded) }
-        Log.i(PLAYER_TAG, "subtitle_delay_ms=$bounded positionMs=${player.currentPosition}")
-        prepareSubtitleSource(player)
-    }
-
-    private fun prepareSubtitleSource(player: ExoPlayer) {
-        val video = videoSource ?: return
-        val source = externalSubtitleSource?.let { MergingMediaSource(video, it) } ?: video
-        val offset = screen.value.subtitleDelayMs
-        val position = player.currentPosition
-        val playing = player.playWhenReady
-        player.setMediaSource(if (offset == 0L) source else SubtitleOffsetMediaSource(source, offset), position)
-        player.prepare()
-        player.playWhenReady = playing
-    }
+    fun loadSubtitle(uri: Uri) = subtitles.loadUri(uri)
+    fun setSubtitleDelay(delayMs: Long) = subtitles.setDelay(delayMs)
+    fun selectSubtitle(group: Tracks.Group?, index: Int = 0) = subtitles.selectTrack(group, index)
+    fun torrentSubtitles(): List<TorrentSubtitleCandidate> = subtitles.candidates()
+    fun loadTorrentSubtitle(candidate: TorrentSubtitleCandidate) = subtitles.loadTorrent(candidate)
+    suspend fun findOnlineSubtitles(): List<ProviderSubtitle> = subtitles.searchOnline()
+    fun loadOnlineSubtitle(candidate: ProviderSubtitle) = subtitles.loadOnline(candidate)
 
     init {
         // This writer drains the final snapshot even after ViewModel cancellation.
@@ -506,6 +546,8 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                 mutableScreen.update { it.copy(configuration = configuration) }
             } catch (_: Exception) {
                 mutableScreen.update { it.copy(configurationError = "Unable to read catalog settings. Save them again.") }
+            } finally {
+                configurationReady.complete(Unit)
             }
         }
     }
@@ -590,6 +632,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     private suspend fun startVideo(index: Int, selection: CatalogSelection? = null, positionMs: Long = 0) {
+            configurationReady.await()
             mutableScreen.update { it.copy(busy = true, error = null, notice = "Preparing video…") }
             val playback = engine.select(index)
             activeSelection = selection
@@ -639,6 +682,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                             }
                         }
                     }
+                    subtitles.onTracksChanged(tracks)
                 }
 
                 override fun onAudioSessionIdChanged(audioSessionId: Int) {
@@ -669,7 +713,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
             })
             val source = ProgressiveMediaSource.Factory(playback.dataSourceFactory)
                 .createMediaSource(MediaItem.fromUri(playback.uri))
-            videoSource = source
+            subtitles.bind(player, playback, selection, screen.value.configuration, source)
             player.setMediaSource(source, positionMs)
             player.prepare()
             player.playWhenReady = true
@@ -723,10 +767,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         saveProgress()
         activeSelection = null
         renderedVideo = false
-        subtitleImport?.cancel()
-        subtitleImport = null
-        videoSource = null
-        externalSubtitleSource = null
+        subtitles.unbind()
         heartbeat?.cancel()
         heartbeat = null
         val player = screen.value.player
@@ -742,6 +783,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         releasePlayer()
         engine.close()
         historyWrites.close()
+        subtitles.close()
         super.onCleared()
     }
 }
@@ -824,7 +866,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
     BackHandler(onBack = ::returnToCatalog)
     val player = screen.player
     if (player != null) {
-        VideoSurface(player, screen.title, torrent, screen.error, onPlayerViewChanged)
+        VideoSurface(player, screen.title, torrent, screen.error, screen.subtitleMessage, onPlayerViewChanged)
         return
     }
     val backFocus = remember { FocusRequester() }
@@ -916,6 +958,7 @@ private fun VideoSurface(
     title: String,
     torrent: TorrentState,
     subtitleError: String?,
+    subtitleMessage: String?,
     onPlayerViewChanged: (PlayerView?) -> Unit,
 ) {
     var controlsVisible by remember(player) { mutableStateOf(true) }
@@ -969,7 +1012,7 @@ private fun VideoSurface(
                 it.keepScreenOn = false
             },
         )
-        if (controlsVisible || buffering || torrent.error != null || subtitleError != null) {
+        if (controlsVisible || buffering || torrent.error != null || subtitleError != null || subtitleMessage != null) {
             Column(
                 modifier = Modifier.align(Alignment.TopStart).fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.65f)).padding(horizontal = 30.dp, vertical = 10.dp),
@@ -979,6 +1022,7 @@ private fun VideoSurface(
                 if (buffering) Text(loadLabel(torrent), color = Color(0xFFB8D8FF), fontSize = 15.sp)
                 if (controlsVisible) Text("Left/right: seek · OK: pause/play · Up: subtitles/timing · Down: CC/settings · Back: stop", color = Color(0xFFD3D9E5), fontSize = 12.sp)
                 Text("Cache ${formatBytes(torrent.cacheBytes)} / ${formatBytes(torrent.cacheLimitBytes)}", color = Color(0xFFBCC5D7), fontSize = 12.sp)
+                subtitleMessage?.let { Text(it, color = Color(0xFFB8D8FF), fontSize = 13.sp) }
                 (subtitleError ?: torrent.error)?.let { Text(it, color = Color(0xFFFFA6A6), fontSize = 13.sp) }
             }
         }

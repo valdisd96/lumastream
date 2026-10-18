@@ -43,6 +43,12 @@ internal suspend fun importSubtitle(context: Context, uri: Uri): ImportedSubtitl
     } finally {
         connection?.disconnect()
     }
+    parseSubtitle(bytes)
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+internal fun parseSubtitle(bytes: ByteArray): ImportedSubtitle {
+    require(bytes.isNotEmpty() && bytes.size <= 2 * 1024 * 1024) { "Subtitles must be nonempty and smaller than 2 MiB." }
     val text = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
         .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString().removePrefix("\uFEFF")
     val vtt = text.startsWith("WEBVTT")
@@ -52,5 +58,5 @@ internal suspend fun importSubtitle(context: Context, uri: Uri): ImportedSubtitl
     val parser = if (vtt) WebvttParser() else SubripParser()
     val subtitle = parser.parseToLegacySubtitle(bytes, 0, bytes.size)
     require(subtitle.eventTimeCount > 0) { "The subtitle document contains no cues." }
-    ImportedSubtitle(bytes, if (vtt) MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP)
+    return ImportedSubtitle(bytes, if (vtt) MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP)
 }

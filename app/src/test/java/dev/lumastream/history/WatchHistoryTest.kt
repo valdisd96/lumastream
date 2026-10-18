@@ -21,12 +21,24 @@ import org.junit.rules.TemporaryFolder
 class WatchHistoryTest {
     @get:Rule val directory = TemporaryFolder()
     private val file: File get() = File(directory.root, "watch-history.json")
-    private val title = CatalogTitle(42, MediaKind.SERIES, "A title 日本語", "Original", "2025", "Overview\nDetails", "/poster.jpg", "/backdrop.jpg")
+    private val title = CatalogTitle(42, MediaKind.SERIES, "A title 日本語", "Original", "2025", "Overview\nDetails", "/poster.jpg", "/backdrop.jpg", originalLanguage = "ja")
     private val details = CatalogDetails(title, "tt1234567", listOf(CatalogSeason(0, "Specials", 2), CatalogSeason(1, "First", 10)), 45)
     private val episode = CatalogEpisode(99, 1, 2, "Second", "Episode overview", "/still.jpg", "2025-02-03")
     private val source = CatalogSource("Provider", "a".repeat(40), 7, "Show.S01E02.mkv", "1080p", "Description\nMore",
         "1080p", listOf("en", "ja"), 5_000_000_000L, 123, listOf("udp://tracker.example:1337/announce", "https://tracker.example/announce"))
     private val entry = WatchEntry(CatalogSelection(details, episode, source), 3_000_000_000L, 4_000_000_000L, 1_800_000_000_000L, false)
+
+    @Test fun legacyHistoryWithoutOriginalLanguageDoesNotGuessEnglish() = runBlocking {
+        WatchHistoryStore(file).save(listOf(entry))
+        val root = org.json.JSONObject(file.readText())
+        root.getJSONArray("entries").getJSONObject(0).getJSONObject("selection")
+            .getJSONObject("details").getJSONObject("title").remove("originalLanguage")
+        file.writeText(root.toString())
+        val restored = WatchHistoryStore(file).load().single()
+        assertEquals(entry.copy(selection = entry.selection.copy(
+            details = details.copy(title = title.copy(originalLanguage = null)),
+        )), restored)
+    }
 
     @Test fun absentHistoryIsEmpty() = runBlocking {
         assertEquals(emptyList<WatchEntry>(), WatchHistoryStore(file).load())

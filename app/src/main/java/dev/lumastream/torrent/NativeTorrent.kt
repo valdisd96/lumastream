@@ -3,6 +3,7 @@ package dev.lumastream.torrent
 import android.os.StatFs
 import android.os.SystemClock
 import android.util.Log
+import dev.lumastream.subtitle.subtitleVideoIdentity
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
@@ -40,7 +41,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 
-internal data class TorrentSelection(val video: VideoFile, val serial: Long)
+internal data class TorrentSelection(val video: TorrentFileEntry, val serial: Long)
 internal data class TorrentSnapshot(
     val peers: Int,
     val downloadedBytes: Long,
@@ -62,6 +63,12 @@ internal class NativeTorrent(
     private val onFailure: (NativeTorrent, String) -> Unit,
     private val maximumCacheBytes: Long = 4L * 1024 * 1024 * 1024,
 ) {
+    private companion object {
+        val selectionIds = AtomicLong()
+        const val AUXILIARY_TIMEOUT_MILLIS = 20_000L
+        const val MOVIE_HASH_BLOCK_BYTES = 64 * 1024
+    }
+
     private val lock = Any()
     private val readLock = ReentrantLock(true)
     private val session = SessionManager(false)
@@ -72,7 +79,7 @@ internal class NativeTorrent(
     private val failure = AtomicReference<IOException?>()
     private val priorityEvents = AtomicLong()
     private val flushed = BitSet()
-    private var selectionSerial = 0L
+    private var infoHash = ""
     private var selection: TorrentSelection? = null
     @Volatile private var selectedProgress: SelectedDownloadProgress? = null
     private var requiredPieceIndex: Int? = null
@@ -91,7 +98,8 @@ internal class NativeTorrent(
     private var reader: RandomAccessFile? = null
     @Volatile var invalidated = false
         private set
-    var videos: List<VideoFile> = emptyList()
+    private var subtitles: List<TorrentFileEntry> = emptyList()
+    var videos: List<TorrentFileEntry> = emptyList()
         private set
     var pieceLength = 0
         private set
@@ -124,7 +132,7 @@ internal class NativeTorrent(
     fun start(params: AddTorrentParams) = synchronized(lock) {
         checkUsable()
         val metadata = params.torrentInfo
-        if (info == null && metadata != null) videoFiles(metadata, directory)
+        if (info == null && metadata != null) mediaFiles(metadata, directory)
         if (info == null) SparseFiles.verifySupport(directory)
         session.addListener(listener)
         if (!session.isRunning) startSession()
@@ -199,7 +207,21 @@ internal class NativeTorrent(
         // and indexing, and delete it explicitly before destroying the session.
         val owned = TorrentInfo(torrent_info(borrowed.swig()))
         try {
-            videos = videoFiles(owned, directory)
+            val files = mediaFiles(owned, directory)
+            videos = files.videos
+            subtitles = files.subtitles
+            val hashes = owned.infoHashes()
+            try {
+                infoHash = if (hashes.hasV1()) {
+                    val hash = hashes.getV1()
+                    try { hash.toHex() } finally { hash.swig().delete() }
+                } else {
+                    val hash = hashes.swig().getV2()
+                    try { hash.to_hex() } finally { hash.delete() }
+                }
+            } finally {
+                hashes.swig().delete()
+            }
             pieceLength = owned.pieceLength()
             val storage = owned.files()
             storageFiles = (0 until storage.numFiles()).filterNot { storage.padFileAt(it) }.map {
@@ -241,7 +263,6 @@ internal class NativeTorrent(
             val current = requireHandle()
             current.setFlags(TorrentFlags.UPLOAD_MODE)
             current.clearPieceDeadlines()
-            selectionSerial++
             reader?.close()
             reader = null
             selection = null
@@ -251,7 +272,7 @@ internal class NativeTorrent(
             windowEnd = -1
             lastDemand = -1
             checkDiskReserve()
-            chosen = TorrentSelection(video, selectionSerial)
+            chosen = TorrentSelection(video, selectionIds.incrementAndGet())
             // Piece priorities, not file priorities, bound downloads. Keeping all files
             // enabled stores shared boundary blocks in their real files, never a partfile.
             val priorities = Priority.array(Priority.DEFAULT, info!!.numFiles())
@@ -302,6 +323,142 @@ internal class NativeTorrent(
     fun ensureSelection(chosen: TorrentSelection) = synchronized(lock) {
         checkUsable()
         if (selection?.serial != chosen.serial) throw InterruptedIOException("Torrent file selection changed")
+    }
+
+    fun videoIdentity(chosen: TorrentSelection): String = synchronized(lock) {
+        ensureSelection(chosen)
+        subtitleVideoIdentity(infoHash, chosen.video.file.index, chosen.video.file.name, chosen.video.file.size)
+    }
+
+    fun subtitleCandidates(chosen: TorrentSelection): List<TorrentSubtitleCandidate> = synchronized(lock) {
+        ensureSelection(chosen)
+        discoverTorrentSubtitles(chosen.video.file, videos.map { it.file }, subtitles.map { it.file })
+    }
+
+    private fun selectionFor(playback: TorrentPlayback): TorrentSelection = synchronized(lock) {
+        checkUsable()
+        val chosen = selection
+        if (chosen == null || chosen.serial != playback.selectionSerial ||
+            videoIdentity(chosen) != playback.videoIdentity
+        ) throw InterruptedIOException("Torrent file selection changed")
+        chosen
+    }
+
+    fun readSubtitle(
+        playback: TorrentPlayback,
+        candidate: TorrentSubtitleCandidate,
+        cancelled: () -> Boolean,
+    ): ByteArray {
+        val chosen = selectionFor(playback)
+        val file = synchronized(lock) {
+            if (candidate !in subtitleCandidates(chosen)) throw IOException("Subtitle does not belong to this video")
+            subtitles.first { it.file.index == candidate.index }
+        }
+        val bytes = ByteArray(file.file.size.toInt())
+        val deadline = SystemClock.elapsedRealtime() + AUXILIARY_TIMEOUT_MILLIS
+        readAuxiliaryRange(chosen, file, 0, bytes, deadline, cancelled)
+        ensureSelection(chosen)
+        return bytes
+    }
+
+    fun readMovieHashSample(playback: TorrentPlayback, cancelled: () -> Boolean): TorrentMovieHashSample {
+        val chosen = selectionFor(playback)
+        val size = chosen.video.file.size
+        if (size < 2L * MOVIE_HASH_BLOCK_BYTES) throw IOException("Video is too small for a movie hash")
+        val deadline = SystemClock.elapsedRealtime() + AUXILIARY_TIMEOUT_MILLIS
+        val first = ByteArray(MOVIE_HASH_BLOCK_BYTES)
+        val last = ByteArray(MOVIE_HASH_BLOCK_BYTES)
+        readAuxiliaryRange(chosen, chosen.video, 0, first, deadline, cancelled)
+        readAuxiliaryRange(chosen, chosen.video, size - last.size, last, deadline, cancelled)
+        ensureSelection(chosen)
+        return TorrentMovieHashSample(size, first, last)
+    }
+
+    private fun readAuxiliaryRange(
+        chosen: TorrentSelection,
+        file: TorrentFileEntry,
+        position: Long,
+        bytes: ByteArray,
+        deadline: Long,
+        cancelled: () -> Boolean,
+    ) {
+        var copied = 0
+        var input: RandomAccessFile? = null
+        try {
+            while (copied < bytes.size) {
+                val absolute = file.torrentOffset + position + copied
+                val piece = (absolute / pieceLength).toInt()
+                val count = minOf(bytes.size - copied, (pieceLength - absolute % pieceLength).toInt())
+                acquireReadLock(deadline, cancelled)
+                try {
+                    checkReadCancelled(cancelled)
+                    demandAuxiliary(chosen, piece)
+                    awaitReadable(chosen, piece, SystemClock.elapsedRealtime(), cancelled, deadline, reportProgress = false)
+                    synchronized(lock) {
+                        ensureSelection(chosen)
+                        checkReadCancelled(cancelled)
+                        val source = input ?: RandomAccessFile(file.path, "r").also { input = it }
+                        source.seek(position + copied)
+                        source.readFully(bytes, copied, count)
+                    }
+                    copied += count
+                } finally {
+                    try {
+                        synchronized(lock) {
+                            // A concurrently replaced selection owns its own priority map.
+                            if (!invalidated && !stopped && selection?.serial == chosen.serial) {
+                                handle?.let { current ->
+                                    if (piece !in windowStart..windowEnd) {
+                                        current.resetPieceDeadline(piece)
+                                        current.piecePriority(piece, Priority.IGNORE)
+                                    } else if (!current.havePiece(piece)) {
+                                        current.setPieceDeadline(piece, (piece - windowStart) * 250)
+                                    }
+                                }
+                            }
+                        }
+                    } finally {
+                        readLock.unlock()
+                    }
+                }
+            }
+        } finally {
+            input?.close()
+        }
+    }
+
+    private fun demandAuxiliary(chosen: TorrentSelection, piece: Int) = synchronized(lock) {
+        ensureSelection(chosen)
+        val policy = cache ?: throw IOException("Rolling cache is not ready")
+        checkDiskReserve()
+        if (policy.needsEviction(piece, piece)) {
+            val videoDemand = lastDemand
+            val firstVideoPiece = (chosen.video.torrentOffset / pieceLength).toInt()
+            val lastVideoPiece = ((chosen.video.torrentOffset + chosen.video.file.size - 1) / pieceLength).toInt()
+            // Keep the playback neighborhood, not the distant subtitle/hash position.
+            // The cache always reserves one piece beyond that retained neighborhood.
+            rotate(chosen, if (videoDemand >= 0) videoDemand else firstVideoPiece, lastVideoPiece)
+            if (videoDemand >= 0) {
+                demand(chosen, maxOf(0L, videoDemand.toLong() * pieceLength - chosen.video.torrentOffset))
+            }
+        }
+        policy.admit(piece, piece)
+        val current = requireHandle()
+        current.piecePriority(piece, Priority.TOP_PRIORITY)
+        if (!current.havePiece(piece)) current.setPieceDeadline(piece, 0)
+    }
+
+    private fun acquireReadLock(deadline: Long, cancelled: () -> Boolean) {
+        try {
+            while (true) {
+                checkReadCancelled(cancelled)
+                if (SystemClock.elapsedRealtime() >= deadline) throw IOException("Timed out waiting for torrent data")
+                if (readLock.tryLock(40, TimeUnit.MILLISECONDS)) return
+            }
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw InterruptedIOException("Torrent read cancelled").apply { initCause(interrupted) }
+        }
     }
 
     private fun demand(chosen: TorrentSelection, filePosition: Long) = synchronized(lock) {
@@ -355,8 +512,8 @@ internal class NativeTorrent(
             session.removeListener(listener)
             current.swig().delete()
             handle = null
-            reader?.close()
-            reader = null
+            // The serialized reader stays open: sparse punching does not replace its inode.
+            // Every subsequent read still checks the new have/flushed map before seeking.
             checkUsable()
             val before = allocatedBytes()
             val keepByteStart = keepStart.toLong() * pieceLength
@@ -414,18 +571,7 @@ internal class NativeTorrent(
         val startedAt = SystemClock.elapsedRealtime()
         // An overlapping extractor must not demote the piece another reader is
         // waiting for. Opens are side-effect free; only this lock owner demands.
-        try {
-            while (true) {
-                checkReadCancelled(cancelled)
-                if (readLock.tryLock(40, TimeUnit.MILLISECONDS)) break
-                if (SystemClock.elapsedRealtime() - startedAt >= PieceReadWait.MAX_WAIT_MILLIS) {
-                    throw IOException("Timed out waiting for another torrent reader to finish")
-                }
-            }
-        } catch (interrupted: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw InterruptedIOException("Torrent read cancelled").apply { initCause(interrupted) }
-        }
+        acquireReadLock(startedAt + PieceReadWait.MAX_WAIT_MILLIS, cancelled)
         try {
             checkReadCancelled(cancelled)
             demand(chosen, position)
@@ -454,7 +600,14 @@ internal class NativeTorrent(
         return bytes + storageOverhead
     }
 
-    private fun awaitReadable(chosen: TorrentSelection, piece: Int, startedAt: Long, cancelled: () -> Boolean) {
+    private fun awaitReadable(
+        chosen: TorrentSelection,
+        piece: Int,
+        startedAt: Long,
+        cancelled: () -> Boolean,
+        deadline: Long = Long.MAX_VALUE,
+        reportProgress: Boolean = true,
+    ) {
         // Most reads stay within an already verified/flushed piece: no queue
         // snapshot or per-read wait tracker is needed on that hot path.
         synchronized(lock) {
@@ -464,6 +617,9 @@ internal class NativeTorrent(
         val wait = PieceReadWait(startedAt)
         while (true) {
             checkReadCancelled(cancelled)
+            if (SystemClock.elapsedRealtime() >= deadline) {
+                throw IOException("Optional torrent data was not available within 20 seconds; video playback is unchanged")
+            }
             synchronized(lock) {
                 ensureSelection(chosen)
                 val current = requireHandle()
@@ -496,14 +652,17 @@ internal class NativeTorrent(
                 }
                 val now = SystemClock.elapsedRealtime()
                 wait.observe(now, loaded, written, verified)
-                requiredPieceIndex = piece
-                requiredBlocksLoaded = loaded.coerceIn(0, total)
-                requiredBlockCount = total
-                requiredWaitMillis = wait.elapsedMillis(now)
-                requiredDataStatus = when {
+                val dataStatus = when {
                     verified || (loaded == total && written < total) -> RequiredDataStatus.WRITING
                     loaded == total -> RequiredDataStatus.VERIFYING
                     else -> RequiredDataStatus.DOWNLOADING
+                }
+                if (reportProgress) {
+                    requiredPieceIndex = piece
+                    requiredBlocksLoaded = loaded.coerceIn(0, total)
+                    requiredBlockCount = total
+                    requiredWaitMillis = wait.elapsedMillis(now)
+                    requiredDataStatus = dataStatus
                 }
                 if (wait.expired(now)) {
                     val status = current.status(statusFlags)

@@ -37,6 +37,8 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import dev.lumastream.catalog.CatalogConfiguration
 import dev.lumastream.catalog.SUPPORTED_CATALOG_LANGUAGES
+import dev.lumastream.catalog.SUPPORTED_SUBTITLE_LANGUAGES
+import dev.lumastream.catalog.SUPPORTED_AUDIO_LANGUAGES
 
 @Composable
 fun CatalogSettingsScreen(
@@ -49,13 +51,19 @@ fun CatalogSettingsScreen(
     var token by remember(configuration) { mutableStateOf(configuration.token) }
     var provider by remember(configuration) { mutableStateOf(configuration.providerManifestUrl) }
     var catalogLanguage by remember(configuration) { mutableStateOf(configuration.catalogLanguage) }
-    var choosingLanguage by remember { mutableStateOf(false) }
+    var subtitleLanguage by remember(configuration) { mutableStateOf(configuration.subtitleLanguage) }
+    var audioLanguage by remember(configuration) { mutableStateOf(configuration.audioLanguage) }
+    var subtitleKey by remember(configuration) { mutableStateOf(configuration.openSubtitlesApiKey) }
+    var choosingLanguage by remember { mutableStateOf<String?>(null) }
     var validationError by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
     val tokenFocus = remember { FocusRequester() }
     val providerFocus = remember { FocusRequester() }
     val backFocus = remember { FocusRequester() }
     val languageFocus = remember { FocusRequester() }
+    val subtitleLanguageFocus = remember { FocusRequester() }
+    val audioLanguageFocus = remember { FocusRequester() }
+    val subtitleKeyFocus = remember { FocusRequester() }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val buttonColors = ButtonDefaults.colors(
@@ -71,40 +79,59 @@ fun CatalogSettingsScreen(
         if (editing) { dismissInput(); backFocus.requestFocus() } else onBack()
     }
     LaunchedEffect(Unit) { backFocus.requestFocus() }
-    if (choosingLanguage) {
+    if (choosingLanguage != null) {
+        val options = when (choosingLanguage) {
+            "Subtitles" -> SUPPORTED_SUBTITLE_LANGUAGES
+            "Audio" -> SUPPORTED_AUDIO_LANGUAGES
+            else -> SUPPORTED_CATALOG_LANGUAGES
+        }
+        val selectedLanguage = when (choosingLanguage) {
+            "Subtitles" -> subtitleLanguage
+            "Audio" -> audioLanguage
+            else -> catalogLanguage
+        }
         val selectedFocus = remember { FocusRequester() }
         val languageList = rememberLazyListState(
-            initialFirstVisibleItemIndex = SUPPORTED_CATALOG_LANGUAGES.indexOfFirst { it.code == catalogLanguage }.coerceAtLeast(0),
+            initialFirstVisibleItemIndex = options.indexOfFirst { it.code == selectedLanguage }.coerceAtLeast(0),
         )
         fun closeLanguages() {
-            choosingLanguage = false
-            languageFocus.requestFocus()
+            val requester = when (choosingLanguage) {
+                "Subtitles" -> subtitleLanguageFocus
+                "Audio" -> audioLanguageFocus
+                else -> languageFocus
+            }
+            choosingLanguage = null
+            requester.requestFocus()
         }
         Dialog(onDismissRequest = { closeLanguages() }) {
             Column(
                 modifier = Modifier.fillMaxWidth().background(Color(0xFF1B2333)).padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text("Catalog language", color = Color.White, fontSize = 24.sp)
+                Text("${choosingLanguage} language", color = Color.White, fontSize = 24.sp)
                 Text("Use Up / Down to choose, OK to select, or Back to cancel.", color = Color(0xFFBCC5D7))
                 LazyColumn(
                     state = languageList,
                     modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(SUPPORTED_CATALOG_LANGUAGES, key = { it.code }) { language ->
+                    items(options, key = { it.code }) { language ->
                         Button(
                             colors = buttonColors,
                             onClick = {
-                                catalogLanguage = language.code
+                                when (choosingLanguage) {
+                                    "Subtitles" -> subtitleLanguage = language.code
+                                    "Audio" -> audioLanguage = language.code
+                                    else -> catalogLanguage = language.code
+                                }
                                 closeLanguages()
                             },
                             modifier = Modifier.fillMaxWidth().then(
-                                if (language.code == catalogLanguage) Modifier.focusRequester(selectedFocus) else Modifier,
+                                if (language.code == selectedLanguage) Modifier.focusRequester(selectedFocus) else Modifier,
                             ),
                         ) {
                             Text(
-                                "${language.label} (${language.code})${if (language.code == catalogLanguage) " — selected" else ""}",
+                                "${language.label} (${language.code})${if (language.code == selectedLanguage) " — selected" else ""}",
                                 color = Color.White,
                             )
                         }
@@ -130,7 +157,7 @@ fun CatalogSettingsScreen(
         item {
             Button(
                 colors = buttonColors,
-                onClick = { dismissInput(); choosingLanguage = true },
+                onClick = { dismissInput(); choosingLanguage = "Catalog" },
                 modifier = Modifier.focusRequester(languageFocus),
             ) {
                 val language = SUPPORTED_CATALOG_LANGUAGES.first { it.code == catalogLanguage }
@@ -138,10 +165,35 @@ fun CatalogSettingsScreen(
             }
         }
         item {
+            Text("Subtitles use only your selected language, with no automatic fallback. Original audio uses the title's known original language; when unknown, the source default is kept.", color = Color(0xFFBCC5D7))
+        }
+        item {
+            Button(
+                colors = buttonColors,
+                onClick = { dismissInput(); choosingLanguage = "Subtitles" },
+                modifier = Modifier.focusRequester(subtitleLanguageFocus),
+            ) {
+                Text("Subtitle language: ${SUPPORTED_SUBTITLE_LANGUAGES.first { it.code == subtitleLanguage }.label} only", color = Color.White)
+            }
+        }
+        item {
+            Button(
+                colors = buttonColors,
+                onClick = { dismissInput(); choosingLanguage = "Audio" },
+                modifier = Modifier.focusRequester(audioLanguageFocus),
+            ) {
+                Text("Audio preference: ${SUPPORTED_AUDIO_LANGUAGES.first { it.code == audioLanguage }.label}", color = Color.White)
+            }
+        }
+        item {
             Button(colors = buttonColors, enabled = !saving, onClick = {
                 dismissInput()
                 try {
-                    val value = CatalogConfiguration(token, provider, catalogLanguage).validated()
+                    val value = configuration.copy(
+                        token = token, providerManifestUrl = provider, catalogLanguage = catalogLanguage,
+                        subtitleLanguage = subtitleLanguage, audioLanguage = audioLanguage,
+                        openSubtitlesApiKey = subtitleKey,
+                    ).validated()
                     validationError = null
                     onSave(value)
                 } catch (failure: IllegalArgumentException) {
@@ -165,6 +217,23 @@ fun CatalogSettingsScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 Button(colors = buttonColors, onClick = { tokenFocus.requestFocus(); keyboard?.show() }) { Text("Edit token", color = Color.White) }
                 Button(colors = buttonColors, onClick = { token = "" }) { Text("Clear token", color = Color.White) }
+            }
+        }
+        item {
+            Text("OpenSubtitles search runs only when you press the search button in the subtitle menu. Private developer setup: configure LumaStream's application consumer key with anonymous downloads enabled, not a separate key for each viewer. No OpenSubtitles account password is needed. The key stays in app-private storage. Search sends the title, episode and release information to OpenSubtitles, which also sees your network IP. Provider quotas, availability and terms apply; a matching result does not guarantee correct timing or permission to use it.", color = Color(0xFFBCC5D7))
+        }
+        item {
+            OutlinedTextField(
+                value = subtitleKey, onValueChange = { if (it.length <= 512) subtitleKey = it },
+                label = { Text("LumaStream consumer key (developer setup)") }, singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth().focusRequester(subtitleKeyFocus).onFocusChanged { editing = it.isFocused },
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                Button(colors = buttonColors, onClick = { subtitleKeyFocus.requestFocus(); keyboard?.show() }) { Text("Edit subtitle key", color = Color.White) }
+                Button(colors = buttonColors, onClick = { subtitleKey = "" }) { Text("Clear subtitle key", color = Color.White) }
             }
         }
         item {
