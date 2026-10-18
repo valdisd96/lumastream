@@ -145,6 +145,10 @@ Positions are saved every ten seconds while playing, on pause/seek, and before r
 
 History does not retain downloaded video: leaving still stops the native session and removes its cache. Resume may buffer while pieces are downloaded again; unavailable sources still require choosing another source.
 
+Catalog opening/playback failures now offer a remote-focused **Choose another source** button alongside the error cause. It reloads sources for the same movie or exact episode, retaining the existing catalog Back path; recovery from a direct history resume returns to Home. The replacement confirmation explicitly offers position transfer or restart because release timing may differ. A failure before the first frame preserves the requested resume position; a playback failure captures the current position before releasing the player. External torrent inputs have no catalog identity and retain the normal Back-to-search action.
+
+Recovery verification on WK03K: build, unit tests and lint passed. A throwaway device runner opened an invalid-hash catalog source with a requested position of `123000` ms, activated the focused recovery button via the remote dispatcher, and displayed real Sintel source results. The replacement confirmation retained `123000` ms; selecting the legal WebTorrent Sintel source through the production model rendered its first frame at exactly `123000` ms with 3,543,704 of 129,241,752 bytes downloaded, then advanced beyond 133 seconds. Screenshots confirmed the error, sources, transfer dialog, video and Home after Back; logs confirmed native shutdown. Forced mid-playback network/decoder failures and series recovery were not exercised in this smoke run. The temporary instrumentation was removed.
+
 Verified on WK03K: `assembleDebug`, `testDebugUnitTest` and `lintDebug` passed, including eight history regression tests. Catalog-selected Sintel rendered, was sought/paused and backgrounded, and persisted position `53481` ms. After terminating the already-backgrounded process and relaunching, Home displayed the saved card; Continue rendered its first frame at exactly `53481` ms and advanced beyond 62 seconds. Start from beginning rendered at `0` ms. History's alternate-source action loaded Sintel sources and selecting another source displayed the explicit transfer warning. Seeking to the end produced `ENDED`, stopped the native session, and displayed **Watched** on Home. Screenshots verified the Home card, resume dialog, transfer warning, resumed video and finished card. Episode identity/roundtrip are unit-tested; live series resume and audible output were not independently verified in this run.
 
 ### Subtitles
@@ -241,7 +245,7 @@ The final build also exercised an explicit empty-results state, detail-to-result
 
 Use English for all documentation and code comments. Work in task branches; code and related documentation go through PRs into `main`. The only direct initialization commit was empty. PRs report checks actually performed and known limitations. Add tests for meaningful behavior and regressions, not coverage targets; device playback verification remains necessary.
 
-Next product work: next-episode navigation and clearer source recovery. Compliant public OpenSubtitles application-key provisioning remains separate from the verified private developer setup. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
+Next product work: next-episode navigation. Compliant public OpenSubtitles application-key provisioning remains separate from the verified private developer setup. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
 
 ### Resuming in a new agent session
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added focused source recovery after catalog opening/playback failures, preserving the movie/episode context and requested/current position, with explicit transfer or restart on replacement and the existing catalog Back path.
+
 - Added matching torrent SRT/VTT discovery, preferred-language auto-selection and manual candidate selection, with bounded verified auxiliary reads that preserve the active video and rolling-cache budget.
 - Added explicit-button OpenSubtitles search/download with video-hash and release matching, strict language/episode checks, quota/rate-limit handling and linked attribution. Developer application-consumer setup is required; public anonymous distribution requires a compliant provider plan.
 - Added persisted subtitle-language and original-audio preferences, preserving TMDB original-language metadata through watch history.
