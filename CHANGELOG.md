@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added explicit next-episode navigation in series player controls and after completion, refreshing TMDB episode identity across season boundaries without autoplay, with series-end, retry and Back-to-season handling.
 - Added focused source recovery after catalog opening/playback failures, preserving the movie/episode context and requested/current position, with explicit transfer or restart on replacement and the existing catalog Back path.
 
 - Added matching torrent SRT/VTT discovery, preferred-language auto-selection and manual candidate selection, with bounded verified auxiliary reads that preserve the active video and rolling-cache budget.

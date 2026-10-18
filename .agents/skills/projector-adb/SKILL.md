@@ -65,10 +65,10 @@ Send deliberate keys, then inspect the result instead of firing long blind seque
 
 | Keycode | Playback action |
 | --- | --- |
-| `KEYCODE_DPAD_CENTER` | Pause/resume; activate focused CC/settings button in the bottom action row |
-| `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | Seek -10 / +30 seconds; in the bottom action row select CC / settings |
+| `KEYCODE_DPAD_CENTER` | Pause/resume; activate the focused CC/settings/next-episode control while navigating player actions |
+| `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | Seek -10 / +30 seconds; while navigating actions, move between CC, settings and next episode (catalog series only) |
 | `KEYCODE_DPAD_UP` | Open subtitles; leave the bottom action row if navigating it |
-| `KEYCODE_DPAD_DOWN` | Focus the bottom action row, initially settings; Left selects CC |
+| `KEYCODE_DPAD_DOWN` | Focus player actions, initially settings; Left selects CC; Right selects next episode for a catalog series, then OK opens its sources without autoplay |
 | `KEYCODE_BACK` | Dismiss menu/keyboard or leave the action row; otherwise stop playback and return to catalog. On catalog Home outside editing, close the activity/task. |
 | `KEYCODE_HOME` | Background app; current implementation stops the torrent and cleans the session |
 

@@ -108,6 +108,10 @@ class MainActivity : ComponentActivity() {
                     isEnabled = true
                     alpha = 1f
                 }
+                view.findViewById<View>(androidx.media3.ui.R.id.exo_next).apply {
+                    isEnabled = model.screen.value.episodeSelection != null
+                    alpha = if (isEnabled) 1f else 0.3f
+                }
                 if (navigatingPlayerActions) view.findViewById<View>(focusedPlayerAction).requestFocus()
             }
         }
@@ -325,6 +329,11 @@ class MainActivity : ComponentActivity() {
                     activePlayerView = view
                     view?.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)
                         ?.setOnClickListener { showSubtitles() }
+                    view?.findViewById<View>(androidx.media3.ui.R.id.exo_next)?.apply {
+                        contentDescription = "Next episode · Choose source"
+                        isEnabled = model.screen.value.episodeSelection != null
+                        setOnClickListener { model.nextEpisode() }
+                    }
                 })
             }
         }
@@ -344,18 +353,28 @@ class MainActivity : ComponentActivity() {
                 when (event.keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         if (event.action == KeyEvent.ACTION_DOWN) {
-                            focusPlayerAction(view, if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT)
-                                androidx.media3.ui.R.id.exo_subtitle else androidx.media3.ui.R.id.exo_settings)
+                            val next = androidx.media3.ui.R.id.exo_next
+                            val settings = androidx.media3.ui.R.id.exo_settings
+                            val subtitles = androidx.media3.ui.R.id.exo_subtitle
+                            val target = if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                                if (focusedPlayerAction == next) settings else subtitles
+                            } else {
+                                if (focusedPlayerAction == subtitles || model.screen.value.episodeSelection == null)
+                                    settings else next
+                            }
+                            focusPlayerAction(view, target)
                         }
                         return true
                     }
                     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                            if (view.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle).hasFocus()) {
-                                showSubtitles()
-                            } else {
-                                leavePlayerActions(view)
-                                view.findViewById<View>(androidx.media3.ui.R.id.exo_settings).performClick()
+                            when (focusedPlayerAction) {
+                                androidx.media3.ui.R.id.exo_subtitle -> showSubtitles()
+                                androidx.media3.ui.R.id.exo_next -> model.nextEpisode()
+                                else -> {
+                                    leavePlayerActions(view)
+                                    view.findViewById<View>(androidx.media3.ui.R.id.exo_settings).performClick()
+                                }
                             }
                         }
                         return true
@@ -440,6 +459,8 @@ data class PlaybackScreenState(
     val resumeEntry: WatchEntry? = null,
     val recoveryEntry: WatchEntry? = null,
     val recoveryRequested: Boolean = false,
+    val episodeSelection: CatalogSelection? = null,
+    val nextEpisodeRequest: CatalogSelection? = null,
     val subtitleDelayMs: Long = 0,
     val subtitleMessage: String? = null,
 )
@@ -517,6 +538,24 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
     fun consumeRecoveryRequest() {
         mutableScreen.update { it.copy(recoveryRequested = false) }
+    }
+
+    fun nextEpisode() {
+        val selection = screen.value.episodeSelection ?: return
+        if (screen.value.busy) return
+        stop("Finding the next episode…")
+        mutableScreen.update { it.copy(page = AppPage.CATALOG, nextEpisodeRequest = selection) }
+    }
+
+    fun consumeNextEpisodeRequest() {
+        mutableScreen.update { it.copy(nextEpisodeRequest = null) }
+    }
+
+    private fun finishPlayback() {
+        val selection = screen.value.episodeSelection
+        stop(if (selection == null) "Playback finished. Open a source to play again."
+            else "Episode finished. Choose Next episode to find sources; playback will not start automatically.")
+        mutableScreen.update { it.copy(episodeSelection = selection) }
     }
 
     private fun captureRecoveryPosition() {
@@ -679,7 +718,10 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                 .setAudioAttributes(AudioAttributes.DEFAULT, true)
                 .build()
             // Publish ownership before configuring Media3 so failures also release the player.
-            mutableScreen.update { it.copy(player = player, title = playback.title, notice = null) }
+            mutableScreen.update {
+                it.copy(player = player, title = playback.title, notice = null,
+                    episodeSelection = selection?.takeIf { value -> value.episode != null })
+            }
             player.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     val name = when (playbackState) {
@@ -690,7 +732,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                         else -> playbackState.toString()
                     }
                     Log.i(PLAYER_TAG, "state=$name positionMs=${player.currentPosition}")
-                    if (playbackState == Player.STATE_ENDED) stop("Playback finished. Open a source to play again.")
+                    if (playbackState == Player.STATE_ENDED && screen.value.player === player) finishPlayback()
                 }
 
                 override fun onRenderedFirstFrame() {
@@ -801,7 +843,9 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         heartbeat?.cancel()
         heartbeat = null
         val player = screen.value.player
-        mutableScreen.update { it.copy(player = null, subtitleDelayMs = 0) }
+        mutableScreen.update {
+            it.copy(player = null, subtitleDelayMs = 0, episodeSelection = null, nextEpisodeRequest = null)
+        }
         if (player != null) {
             Log.i(PLAYER_TAG, "release positionMs=${player.currentPosition}")
             player.release()
@@ -836,6 +880,8 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                 onResume = model::resume,
                 recoverySelection = screen.recoveryEntry?.selection?.takeIf { screen.recoveryRequested },
                 onRecoveryConsumed = model::consumeRecoveryRequest,
+                nextEpisodeSelection = screen.nextEpisodeRequest,
+                onNextEpisodeConsumed = model::consumeNextEpisodeRequest,
             )
             val entry = screen.resumeEntry
             val selection = screen.resumeSelection
@@ -898,7 +944,8 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
     BackHandler(onBack = ::returnToCatalog)
     val player = screen.player
     if (player != null) {
-        VideoSurface(player, screen.title, torrent, screen.error, screen.subtitleMessage, onPlayerViewChanged)
+        VideoSurface(player, screen.title, torrent, screen.error, screen.subtitleMessage,
+            screen.episodeSelection != null, onPlayerViewChanged)
         return
     }
     val backFocus = remember { FocusRequester() }
@@ -925,9 +972,18 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("LumaStream", color = Color.White, fontSize = 30.sp)
                 val recovery = screen.error != null && screen.recoveryEntry != null
-                RemoteButton(if (recovery) "Choose another source" else "Back to search",
-                    modifier = Modifier.focusRequester(backFocus), enabled = !recovery || !screen.busy,
-                    onClick = if (recovery) model::recoverSource else ::returnToCatalog)
+                val nextEpisode = screen.episodeSelection != null
+                RemoteButton(when {
+                    recovery -> "Choose another source"
+                    nextEpisode -> "Next episode"
+                    else -> "Back to search"
+                }, modifier = Modifier.focusRequester(backFocus),
+                    enabled = !(recovery || nextEpisode) || !screen.busy,
+                    onClick = when {
+                        recovery -> model::recoverSource
+                        nextEpisode -> model::nextEpisode
+                        else -> ::returnToCatalog
+                    })
             }
         }
         item {
@@ -937,6 +993,11 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                     Text(if (screen.busy) "Preparing your video…" else "Playback", color = Color.White, fontSize = 22.sp)
                 }
                 screen.notice?.let { Text(it, color = Color(0xFFB8D8FF), fontSize = 16.sp) }
+                screen.episodeSelection?.let { selection ->
+                    Text("${selection.details.title.title} · S${selection.episode?.season} E${selection.episode?.number}",
+                        color = Color.White, fontSize = 18.sp)
+                    Text("Back returns to the catalog.", color = Color(0xFFBCC5D7), fontSize = 14.sp)
+                }
                 if (screen.busy) {
                     Text(torrent.message, color = Color(0xFFB8D8FF), fontSize = 16.sp)
                     Text(transferLabel(torrent), color = Color(0xFFD3D9E5), fontSize = 15.sp)
@@ -997,6 +1058,7 @@ private fun VideoSurface(
     torrent: TorrentState,
     subtitleError: String?,
     subtitleMessage: String?,
+    nextEpisodeAvailable: Boolean,
     onPlayerViewChanged: (PlayerView?) -> Unit,
 ) {
     var controlsVisible by remember(player) { mutableStateOf(true) }
@@ -1032,7 +1094,7 @@ private fun VideoSurface(
                     })
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     setShowPreviousButton(false)
-                    setShowNextButton(false)
+                    setShowNextButton(nextEpisodeAvailable)
                     setShowRewindButton(true)
                     setShowFastForwardButton(true)
                     setShowSubtitleButton(true)
@@ -1043,7 +1105,14 @@ private fun VideoSurface(
                     post { requestFocus(); showController() }
                 }
             },
-            update = { it.player = player },
+            update = { view ->
+                view.player = player
+                view.setShowNextButton(nextEpisodeAvailable)
+                view.findViewById<View>(androidx.media3.ui.R.id.exo_next).apply {
+                    isEnabled = nextEpisodeAvailable
+                    alpha = if (nextEpisodeAvailable) 1f else 0.3f
+                }
+            },
             onRelease = {
                 onPlayerViewChanged(null)
                 it.player = null
@@ -1058,7 +1127,8 @@ private fun VideoSurface(
                 Text(title, color = Color.White, fontSize = 17.sp, maxLines = 1)
                 Text("${if (buffering) "Buffering · " else ""}${transferLabel(torrent)} · Buffered ${bufferedMs / 1000} s", color = Color(0xFFD3D9E5), fontSize = 15.sp)
                 if (buffering) Text(loadLabel(torrent), color = Color(0xFFB8D8FF), fontSize = 15.sp)
-                if (controlsVisible) Text("Left/right: seek · OK: pause/play · Up: subtitles/timing · Down: CC/settings · Back: stop", color = Color(0xFFD3D9E5), fontSize = 12.sp)
+                if (controlsVisible) Text("Left/right: seek · OK: pause/play · Up: subtitles/timing · Down: CC/settings${if (nextEpisodeAvailable) "/next episode (Right → OK)" else ""} · Back: stop",
+                    color = Color(0xFFD3D9E5), fontSize = 12.sp)
                 Text("Cache ${formatBytes(torrent.cacheBytes)} / ${formatBytes(torrent.cacheLimitBytes)}", color = Color(0xFFBCC5D7), fontSize = 12.sp)
                 subtitleMessage?.let { Text(it, color = Color(0xFFB8D8FF), fontSize = 13.sp) }
                 (subtitleError ?: torrent.error)?.let { Text(it, color = Color(0xFFFFA6A6), fontSize = 13.sp) }

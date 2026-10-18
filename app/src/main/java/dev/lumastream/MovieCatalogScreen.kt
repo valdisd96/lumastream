@@ -83,6 +83,7 @@ import dev.lumastream.catalog.MediaKind
 import dev.lumastream.catalog.SourcePage
 import dev.lumastream.catalog.StremioSources
 import dev.lumastream.catalog.TmdbCatalog
+import dev.lumastream.catalog.findNextEpisode
 import dev.lumastream.history.WatchEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -93,7 +94,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-private enum class CatalogRoute { RESULTS, DETAILS, EPISODES, SOURCES }
+private enum class CatalogRoute { RESULTS, DETAILS, EPISODES, SOURCES, NEXT_EPISODE }
 
 private data class MovieCatalogState(
     val query: String = "",
@@ -113,6 +114,7 @@ private data class MovieCatalogState(
     val historySources: Boolean = false,
     val loading: Boolean = false,
     val error: String? = null,
+    val nextEpisodeAbsent: Boolean = false,
     val focusEpoch: Long = 0,
 )
 
@@ -266,6 +268,39 @@ private class MovieCatalogViewModel : ViewModel() {
         }
     }
 
+    fun nextEpisode(selection: CatalogSelection) {
+        val episode = selection.episode ?: return
+        cancel()
+        mutableState.update {
+            it.copy(route = CatalogRoute.NEXT_EPISODE, selected = selection.details.title,
+                details = selection.details, season = episode.season, episode = episode,
+                episodes = emptyList(), episodesLoaded = false, sources = null, historySources = false,
+                nextEpisodeAbsent = false, error = null, focusEpoch = it.focusEpoch + 1)
+        }
+        loadNextEpisode()
+    }
+
+    private fun loadNextEpisode() {
+        val current = state.value
+        val title = current.selected ?: return
+        val episode = current.episode ?: return
+        mutableState.update { it.copy(nextEpisodeAbsent = false) }
+        load {
+            val client = catalog ?: error("Configure a TMDB API read access token to find the next episode.")
+            val details = client.details(title)
+            val next = findNextEpisode(details, episode) { client.episodes(details, it) }
+            if (next == null) {
+                current.copy(details = details, nextEpisodeAbsent = true)
+            } else {
+                val sources = checkNotNull(provider).sources(details, next.episode)
+                current.copy(route = CatalogRoute.SOURCES, details = details, selected = details.title,
+                    episode = next.episode, season = next.episode.season, episodes = next.seasonEpisodes,
+                    episodesLoaded = true, sources = sources, nextEpisodeAbsent = false,
+                    focusEpoch = current.focusEpoch + 1)
+            }
+        }
+    }
+
     private fun loadSources() {
         val client = provider ?: return
         val current = state.value
@@ -279,6 +314,7 @@ private class MovieCatalogViewModel : ViewModel() {
             CatalogRoute.DETAILS -> loadDetails()
             CatalogRoute.EPISODES -> loadEpisodes()
             CatalogRoute.SOURCES -> loadSources()
+            CatalogRoute.NEXT_EPISODE -> loadNextEpisode()
         }
     }
 
@@ -289,6 +325,7 @@ private class MovieCatalogViewModel : ViewModel() {
             CatalogRoute.RESULTS -> return false
             CatalogRoute.DETAILS -> CatalogRoute.RESULTS
             CatalogRoute.EPISODES -> CatalogRoute.DETAILS
+            CatalogRoute.NEXT_EPISODE -> CatalogRoute.DETAILS
             CatalogRoute.SOURCES -> when {
                 current.historySources -> CatalogRoute.RESULTS
                 current.episode == null -> CatalogRoute.DETAILS
@@ -325,6 +362,8 @@ fun MovieCatalogScreen(
     onOpenSource: (CatalogSelection) -> Unit,
     recoverySelection: CatalogSelection?,
     onRecoveryConsumed: () -> Unit,
+    nextEpisodeSelection: CatalogSelection?,
+    onNextEpisodeConsumed: () -> Unit,
 ) {
     val model: MovieCatalogViewModel = viewModel(factory = remember {
         object : ViewModelProvider.Factory {
@@ -374,6 +413,13 @@ fun MovieCatalogScreen(
         recoverySelection?.let {
             model.recoverSources(it)
             onRecoveryConsumed()
+        }
+    }
+
+    LaunchedEffect(nextEpisodeSelection) {
+        nextEpisodeSelection?.let {
+            model.nextEpisode(it)
+            onNextEpisodeConsumed()
         }
     }
 
@@ -476,6 +522,7 @@ fun MovieCatalogScreen(
                         CatalogRoute.RESULTS -> "Back to results"
                         CatalogRoute.DETAILS -> if (state.searched) "Back to results" else "Back to Home"
                         CatalogRoute.EPISODES -> "Back to seasons"
+                        CatalogRoute.NEXT_EPISODE -> "Back to seasons"
                         CatalogRoute.SOURCES -> when {
                             state.historySources -> "Back to Home"
                             state.episode == null -> "Back to details"
@@ -665,6 +712,15 @@ fun MovieCatalogScreen(
             }
             CatalogRoute.DETAILS -> CatalogDetailsContent(state, model::retry, model::findSources, model::selectSeason)
             CatalogRoute.EPISODES -> CatalogEpisodesContent(state, model::retry, model::findSources)
+            CatalogRoute.NEXT_EPISODE -> {
+                CatalogReadable(state.selected?.title.orEmpty(), heading = true)
+                CatalogReadable("After S${state.episode?.season} E${state.episode?.number} · ${state.episode?.title.orEmpty()}")
+                CatalogStatus(state, model::retry)
+                if (state.nextEpisodeAbsent && !state.loading && state.error == null) {
+                    CatalogReadable("No next episode is listed by TMDB. Specials stay within Season 0; regular seasons follow episode numbering.")
+                    CatalogButton("Refresh episodes", onClick = model::retry)
+                }
+            }
             CatalogRoute.SOURCES -> CatalogSourcesContent(state, model::retry) { source ->
                 model.selection(source, configuration)?.let { selection ->
                     dismissInput()
@@ -933,6 +989,7 @@ private fun CatalogStatus(state: MovieCatalogState, retry: () -> Unit) {
             CatalogRoute.DETAILS -> "Loading title details…"
             CatalogRoute.EPISODES -> "Loading episodes…"
             CatalogRoute.SOURCES -> "Requesting torrent sources…"
+            CatalogRoute.NEXT_EPISODE -> "Finding the next episode and its sources…"
         }, color = Color.White)
     }
     state.error?.let { error ->
