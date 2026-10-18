@@ -2,6 +2,14 @@
 
 An Android TV application for playing torrents before the download completes, in a single APK with an embedded libtorrent engine and no mandatory external server.
 
+## Download
+
+The first signed preview is [v0.1.0](https://github.com/valdisd96/lumastream/releases/tag/v0.1.0). Download `lumastream-0.1.0-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
+
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.1.0-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+
+The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
+
 ## Current functionality
 
 - Search movies and series from a search-first Home screen, choose a title/episode and a source, and play without entering or editing torrent URLs. External `ACTION_VIEW` and `ACTION_SEND` torrent inputs remain supported for file managers and integration checks; the manual-link form, torrent-picker button and Sintel demo button have been removed.
@@ -75,9 +83,35 @@ export JAVA_HOME="$(brew --prefix openjdk@17)"
 export ANDROID_HOME="$(brew --prefix)/share/android-commandlinetools"
 ```
 
-Use `adb -s DEVICE` if multiple devices are connected. Configure and authorize ADB on the TV first; never forward its port to the internet. Builds are debug-signed, not production releases. Debug keys from different machines are not interchangeable for in-place updates.
+Use `adb -s DEVICE` if multiple devices are connected. Configure and authorize ADB on the TV first; never forward its port to the internet. `assembleDebug` produces debug-signed development builds, not the signed APK distributed through Releases. Debug keys from different machines are not interchangeable for in-place updates.
 
 The Android GitHub Actions workflow builds and lints pull requests and `main`, and uploads a debug APK. No empty test suite is presented as behavioral verification.
+
+### Signing a release
+
+Release signing is performed locally with Android SDK tools; Gradle's `assembleRelease` output is intentionally unsigned. The maintainer's persistent PKCS#12 key (`release.p12`, alias `lumastream`) and password file (`store-password`) are stored outside the repository in `$HOME/.config/lumastream/signing/`, with directory mode `700` and file mode `600`. Keep an encrypted offline backup of both; losing the key prevents compatible updates. Never commit or upload either file as a release asset, and never generate a replacement key for a routine update.
+
+With `JAVA_HOME` and `ANDROID_HOME` configured as above:
+
+```sh
+./gradlew assembleRelease testReleaseUnitTest lintRelease
+TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+SIGNING="$HOME/.config/lumastream/signing"
+OUT=".local/release-v0.1.0"
+mkdir -p "$OUT"
+"$TOOLS/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$OUT/aligned.apk"
+"$TOOLS/apksigner" sign \
+  --ks "$SIGNING/release.p12" --ks-key-alias lumastream \
+  --ks-pass "file:$SIGNING/store-password" \
+  --out "$OUT/lumastream-0.1.0-armeabi-v7a.apk" "$OUT/aligned.apk"
+"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.1.0-armeabi-v7a.apk"
+"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.1.0-armeabi-v7a.apk"
+(cd "$OUT" && shasum -a 256 lumastream-0.1.0-armeabi-v7a.apk > SHA256SUMS)
+```
+
+Release certificate SHA-256: `c113d8eb54f1eb4cdfe327612236e7dbd7cedce27ab9235a4f4938ad01e35f70`.
+
+For v0.1.0, `assembleRelease`, all 24 release unit tests and `lintRelease` passed. The distribution APK passed signature/alignment checks, contains only ARMv7 native libraries and bundled third-party notices, is not debuggable, and was checked for absence of the owner's private TMDB token. On WK03K, a separately built release-mode copy signed with the same key and temporary application ID `dev.lumastream.releasesmoke` exercised fresh Home, external Sintel input, video selection, actual video rendering, advancing playback and normal native-session shutdown. First frame arrived with 2,626,200 of 129,241,752 bytes downloaded; playback reached 29,261 ms before stopping. The temporary app was removed without replacing the owner's debug installation. This checks release-mode runtime behavior, not installation of the exact distribution APK over a differently signed app; no new audible-sound claim is made.
 
 ## Use with a remote
 
@@ -129,7 +163,7 @@ Back dismisses query editing first, returns from details to the selected result,
 
 Search uses a literal phrase, not user-supplied search operators. Queries are limited to 200 characters and API responses to 2 MiB; requests have a 30-second deadline and 15-second socket timeouts. Rate-limit responses surface a cooldown rather than automatic retries. Only the current page is retained, so browsing does not grow an unbounded list.
 
-Catalog results are not promises of torrent availability: missing, restricted, oversized, and unreachable sources produce errors. Source and reported license URLs are displayed as text. Internet Archive does not guarantee uploaded rights declarations; verify permission before downloading or sharing. See its [API documentation](https://archive.org/developers/index-apis.html), [automated-access guidance](https://archive.org/developers/bots.html), [rights guidance](https://archivesupport.zendesk.com/hc/en-us/articles/360014759692-Rights), and [terms](https://archive.org/about/terms). The current terms page's body did not load during this session; full terms review remains a release prerequisite, not implied legal clearance.
+Catalog results are not promises of torrent availability: missing, restricted, oversized, and unreachable sources produce errors. Source and reported license URLs are displayed as text. Internet Archive does not guarantee uploaded rights declarations; verify permission before downloading or sharing. See its [API documentation](https://archive.org/developers/index-apis.html), [automated-access guidance](https://archive.org/developers/bots.html), [rights guidance](https://archivesupport.zendesk.com/hc/en-us/articles/360014759692-Rights), and [terms](https://archive.org/about/terms). The rendered terms, privacy and copyright policies were reviewed on 2026-10-18 (terms dated 2014-12-31): collection access is granted for scholarship and research purposes only, use must be noninfringing, service interference is prohibited, and access/content availability is not guaranteed. The Archive adapter is for uses consistent with those restrictions, not an unrestricted entertainment catalog. A reported Creative Commons license is not a guarantee of rights or permission to disregard service terms. This review is not legal clearance.
 
 Example external opening:
 
