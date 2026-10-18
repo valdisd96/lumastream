@@ -4,13 +4,13 @@ An Android TV application for playing torrents before the download completes, in
 
 ## Download
 
-The latest signed preview is [v0.2.0](https://github.com/valdisd96/lumastream/releases/tag/v0.2.0). Download `lumastream-0.2.0-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
+The latest signed preview is [v0.2.1](https://github.com/valdisd96/lumastream/releases/tag/v0.2.1). Download `lumastream-0.2.1-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
 
-Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.2.0-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.2.1-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
 
 The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
 
-Version 0.2.0 has `versionCode=2` and uses the same release certificate as 0.1.0. Install it over the signed 0.1.0 release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible.
+Version 0.2.1 has `versionCode=3` and uses the same release certificate as 0.1.0 and 0.2.0. Install it over either signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible.
 
 ## Current functionality
 
@@ -40,6 +40,12 @@ The final build also exercised Home search → Sintel details → source selecti
 Settings accept an HTTPS Stremio `/manifest.json` URL. The current default is Torrentio; live source lists were exercised on the projector for Sintel, Big Buck Bunny and The Studio S1E2, and catalog-selected Sintel playback was verified. Only torrent `infoHash` streams are supported; HTTP video, debrid, DRM and external-player streams are not. Provider availability and permission to obtain each work are separate concerns. Metadata access is not permission to download a work.
 
 Sources display provider-reported quality, languages, size and seeders only when available. Identity checks precede selection; duplicates are combined by hash and selected file. Actual torrent file metadata is checked before playback: contradictory filename/year/episode information or ambiguous episode files produce an error rather than selecting the largest video.
+
+Source cards show advisory warnings for explicit 3D/stereoscopic labels, codecs absent from the device's advertised decoders, and reported dimensions rejected by every candidate decoder. Decoder capabilities are queried on the device, not hardcoded for the projector. Missing/conflicting hints or failed capability queries remain unknown; no warning is not a compatibility guarantee. Resolution-only labels do not invent a width, and warnings never hide or block a source. Actual codec profiles, frame rate, HDR and stream integrity still require playback.
+
+Playback errors distinguish unsupported formats, decoder limits, decoder startup/failure, container parsing, media-data reads and audio-output failures. Available renderer MIME/codec/dimensions and underlying causes remain visible with guidance to choose another source.
+
+Compatibility verification on WK03K: debug build, all 93 unit tests (including 15 compatibility regressions), and lint passed. An isolated temporary debug application used real device decoder capabilities with a synthetic `H264 1920x2160 3D` source card; screenshots confirmed readable stereoscopic and decoder-limit warnings with Play still visible. An injected Media3 capability error exercised the production error formatter/screen, and a separate IO error retained its underlying cause without decoder advice. This checks warnings and error presentation, not playback of an incompatible video. The installed signed v0.2.0 and its data were not replaced; temporary verification code/apps were removed.
 
 For catalog sources without provider-supplied trackers, magnets include `udp://tracker.opentrackr.org:1337/announce` and `udp://open.demonii.com:1337/announce` alongside normal DHT discovery. Explicit provider tracker lists are preserved instead of supplemented. These public trackers receive the torrent hash and network IP; they are peer-discovery services, not playback servers. Externally supplied magnets and private torrent documents are not modified. The validated hash uses the conventional readable `xt=urn:btih:` form; percent-encoded colons were also verified to parse correctly in libtorrent.
 
@@ -99,16 +105,16 @@ With `JAVA_HOME` and `ANDROID_HOME` configured as above:
 ./gradlew assembleRelease testReleaseUnitTest lintRelease
 TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 SIGNING="$HOME/.config/lumastream/signing"
-OUT=".local/release-v0.2.0"
+OUT=".local/release-v0.2.1"
 mkdir -p "$OUT"
 "$TOOLS/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$OUT/aligned.apk"
 "$TOOLS/apksigner" sign \
   --ks "$SIGNING/release.p12" --ks-key-alias lumastream \
   --ks-pass "file:$SIGNING/store-password" \
-  --out "$OUT/lumastream-0.2.0-armeabi-v7a.apk" "$OUT/aligned.apk"
-"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.2.0-armeabi-v7a.apk"
-"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.2.0-armeabi-v7a.apk"
-(cd "$OUT" && shasum -a 256 lumastream-0.2.0-armeabi-v7a.apk > SHA256SUMS)
+  --out "$OUT/lumastream-0.2.1-armeabi-v7a.apk" "$OUT/aligned.apk"
+"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.2.1-armeabi-v7a.apk"
+"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.2.1-armeabi-v7a.apk"
+(cd "$OUT" && shasum -a 256 lumastream-0.2.1-armeabi-v7a.apk > SHA256SUMS)
 ```
 
 Release certificate SHA-256: `c113d8eb54f1eb4cdfe327612236e7dbd7cedce27ab9235a4f4938ad01e35f70`.

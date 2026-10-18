@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — 2026-10-18 (pre-release)
+
+- Added advisory source-card warnings for stereoscopic labels, unavailable advertised decoders and dimensions beyond device decoder capabilities; ambiguous provider metadata remains unknown and sources stay selectable.
+- Added actionable playback error categories and available renderer format details while preserving underlying data-read errors.
+- Verified 15 compatibility regression tests and isolated projector warning/error screens without replacing the installed signed release.
+
 ## 0.2.0 — 2026-10-18 (pre-release)
 
 - Published a signed ARMv7 update with version code 2, the original release certificate and SHA-256 checksum.

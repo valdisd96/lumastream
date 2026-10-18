@@ -53,6 +53,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -935,6 +936,8 @@ private fun CatalogEpisodesContent(state: MovieCatalogState, retry: () -> Unit, 
 private fun CatalogSourcesContent(state: MovieCatalogState, retry: () -> Unit, select: (CatalogSource) -> Unit) {
     val title = state.details?.title ?: return
     val episode = state.episode
+    val context = LocalContext.current
+    val compatibility = remember(context) { SourceCompatibility(context) }
     // Identity remains outside the scrolling source list, including while requests fail.
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -945,6 +948,7 @@ private fun CatalogSourcesContent(state: MovieCatalogState, retry: () -> Unit, s
             }
         }
         Text("Torrent sources · Availability is not verified. Only open content you are authorized to share. BitTorrent may upload and exposes your IP to peers.", color = CatalogMuted, fontSize = 13.sp)
+        Text("Codec support is unverified until media is read. Seed counts are provider reports, not a guarantee of availability.", color = CatalogMuted, fontSize = 13.sp)
         CatalogStatus(state, retry)
         val page = state.sources
         if (page != null && page.sources.isEmpty()) {
@@ -959,6 +963,7 @@ private fun CatalogSourcesContent(state: MovieCatalogState, retry: () -> Unit, s
             if (page.unsupportedCount > 0) Text("${page.unsupportedCount} unsupported stream(s) omitted.", color = CatalogMuted, fontSize = 13.sp)
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(page.sources) { source ->
+                    val warnings = remember(source, compatibility) { compatibility.warnings(source) }
                     CatalogTile(Modifier.fillMaxWidth(), onClick = { select(source) }) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                             Text(source.displayName.ifBlank { source.provider }, color = Color.White, fontSize = 18.sp)
@@ -971,6 +976,9 @@ private fun CatalogSourcesContent(state: MovieCatalogState, retry: () -> Unit, s
                             }
                             if (metadata.isNotEmpty()) Text(metadata.joinToString(" · "), color = CatalogMuted)
                             source.filename?.let { Text(it, color = CatalogMuted, fontSize = 13.sp) }
+                            warnings.forEach { warning ->
+                                Text(warning, color = Color(0xFFFFB4AB), fontSize = 14.sp)
+                            }
                             Text("Play", color = CatalogAccent, fontSize = 14.sp)
                         }
                     }
