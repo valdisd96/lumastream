@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added bounded rolling torrent storage (up to 4 GiB with a 1 GiB free-space reserve), conservative accounting of incomplete requests, safe sparse-block eviction after native IO shutdown, and re-download of evicted pieces on backward seeks. Videos no longer require free space for their full contents.
+- Added ARMv7 sparse-storage JNI with a filesystem capability/integrity probe, cache budget display, nine window/mapping regression tests, and pinned NDK/CMake build dependencies.
+- Serialized cache-directory ownership across engine instances so a finishing Activity's asynchronous cleanup cannot remove a newly opened session.
 - Added persistent catalog watch history and Home cards for watched movies and the latest episode of each series, with saved position, duration, progress and completed status.
 - Added direct resume of the saved torrent/file, restart and exact-title/episode source replacement with explicit position transfer; history survives app recreation without retaining video cache.
 - Added a persisted catalog-language selector with English as the default, including migration of existing settings; all TMDB search/detail/episode requests use the selected language independently of query text.
@@ -21,7 +24,7 @@
 - Added remote pause/resume, backward/forward seeking, audio/settings access, and automatic file focus; fixed keyboard dismissal and native-player key routing on the projector.
 - Verified real 1080p playback before full download, seeking to missing pieces, magnet metadata acquisition, audio-track switching, invalid-input handling, and background cache cleanup on WK03K. The owner confirmed audible playback through the built-in speakers on 2026-10-17.
 - Added a pinned Gradle wrapper, Android build/lint CI with explicit SDK packages and APK artifacts, and bundled native dependency notices.
-- Multi-source search, automatic subtitle discovery, and the proposed rolling disk cache remain planned product work.
+- Multi-source search and automatic subtitle discovery remain planned product work.
 - Added a new-session agent entry point and a project-local `projector-adb` skill covering device connection, remote controls, playback evidence, and cleanup. Added a screenshot helper verified on WK03K that strips firmware text preceding PNG data; local device details and captures are excluded from Git.
 - Added Internet Archive video search with remote query entry, bounded pagination, creator/source/license details, real metadata-to-torrent opening, cancellation, and visible availability/network errors. Added bounded HTTPS JSON reads, literal query escaping, and rate-limit cooldown handling.
 - Verified catalog-to-player Sintel playback on WK03K before full download, result pagination, and restricted-item handling. Added explicit remote query editing and prevented stale keyboard state from trapping Back on details or playback.

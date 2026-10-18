@@ -539,6 +539,8 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                         .setPrioritizeTimeOverSizeThresholds(false)
                         .build(),
                 )
+                // A loader may be joining native disk workers during cache eviction.
+                .setReleaseTimeoutMs(5_000)
                 .setSeekBackIncrementMs(10_000)
                 .setSeekForwardIncrementMs(30_000)
                 .setAudioAttributes(AudioAttributes.DEFAULT, true)
@@ -895,7 +897,7 @@ private fun VideoSurface(
 }
 
 private fun transferLabel(state: TorrentState): String =
-    "${formatBytes(state.downloadedBytes)} / ${formatBytes(state.totalBytes)} downloaded · ${state.peers} peers"
+    "Cache ${formatBytes(state.cacheBytes)} / ${formatBytes(state.cacheLimitBytes)} · ${state.peers} peers"
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L * 1024L -> String.format(Locale.US, "%.2f GiB", bytes / (1024.0 * 1024.0 * 1024.0))

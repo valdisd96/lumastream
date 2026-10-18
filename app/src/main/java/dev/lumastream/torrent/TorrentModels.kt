@@ -10,6 +10,8 @@ data class TorrentState(
     val files: List<TorrentFile> = emptyList(),
     val downloadedBytes: Long = 0,
     val totalBytes: Long = 0,
+    val cacheBytes: Long = 0,
+    val cacheLimitBytes: Long = 0,
     val peers: Int = 0,
     val error: String? = null,
 )

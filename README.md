@@ -11,7 +11,7 @@ An Android TV application for playing torrents before the download completes, in
 - Stop playback and the native session when leaving the application; clean the session cache on stop or when opening another source.
 - Search Internet Archive video items, browse bounded result pages, review creator/source/reported license, and open an item's torrent through the same video-selection flow.
 
-The playback milestone, Internet Archive search and visual TMDB catalog have device verification, including first-frame playback from a catalog-selected torrent source. Catalog watch history and resume are implemented; rolling disk-cache eviction is not.
+The playback milestone, Internet Archive search, visual TMDB catalog and catalog watch history have device verification. Torrent storage uses a bounded rolling cache rather than requiring free space for the full selected video.
 
 ## Visual movie and series catalog
 
@@ -49,6 +49,7 @@ Verified on XGIMI MoGo 4 Laser (WK03K), Android TV 11 / API 30, `armeabi-v7a`, w
 - AndroidX Media3 1.5.1 / ExoPlayer.
 - libtorrent4j 2.1.0-39, including the ARMv7 native library.
 - Gradle 8.9, Android Gradle Plugin 8.7.3, JDK 17.
+- Android NDK 27.0.12077973 and CMake 3.22.1 for the small sparse-storage JNI library.
 - Minimum Android API 28; compile/target API 35. This APK contains only ARMv7 native binaries, not emulator or ARM64-only builds.
 
 ## Build and install
@@ -56,7 +57,7 @@ Verified on XGIMI MoGo 4 Laser (WK03K), Android TV 11 / API 30, `armeabi-v7a`, w
 Install JDK 17 and the Android SDK command-line tools. Install SDK packages and accept their licenses:
 
 ```sh
-sdkmanager "platforms;android-35" "build-tools;35.0.0"
+sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
 ```
 
 Set `JAVA_HOME` to your JDK 17 installation. Set `ANDROID_HOME` to your SDK directory, or put `sdk.dir=/path/to/android-sdk` in the ignored `local.properties` file.
@@ -142,15 +143,27 @@ The verification films [Sintel](https://durian.blender.org/about/) and [Big Buck
 
 ## Storage and playback boundaries
 
-The current implementation uses normal sparse torrent storage. **It does not yet implement the proposed 4 GiB rolling cache.** Selecting a video requires enough free space for its remaining contents, boundary/lookahead allowance, and a 1 GiB reserve. Downloaded pieces remain until stop or source replacement; videos exceeding available storage are rejected rather than silently filling the device. The reserve is also checked during playback.
+Torrent payload storage uses a **rolling cache capped at 4 GiB**, reduced at session start when free space is lower. A separate **1 GiB free-space reserve** and in-flight allowance remain protected. Selecting a video no longer requires enough space for the entire file. Cache accounting reserves every piece that has been requested, including incomplete/cancelled downloads, plus filesystem-block tails, directories and bookkeeping. The player displays budgeted cache use and its limit; the allowance means this can exceed the payload's actual allocated bytes.
+
+Before admitting pieces that would exceed the budget, LumaStream stops the native session and waits for its disk/network workers to finish. It keeps a piece-aligned neighborhood of approximately 8 MiB behind the current demand and the bounded forward window, releases old physical blocks using `FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE`, then restores the session from in-memory resume data. Evicted pieces are cleared from the `have_pieces`/`verified_pieces` maps and partial-piece resume state is discarded. Native reads and eviction share one lock; no reader can observe a punched hole as verified video data. DHT state, trackers, web seeds and known peers survive the rollover. This uses libtorrent's documented [resume parameters](https://www.libtorrent.org/reference-Add_Torrent.html#add_torrent_params), not a fabricated complete-piece map or a full-torrent recheck.
+
+Rollover can briefly buffer while peer connections are restored. Seeking into an evicted range downloads and verifies it again. File priorities permit real-file storage of shared boundary pieces, but only the selected video's demand window has nonzero piece priorities; unrelated files are not downloaded in full. A startup probe verifies actual block reclamation and retained-byte integrity on the cache filesystem. Unsupported hole punching produces an explicit error rather than silently reverting to unbounded storage. Concurrent disk consumption by other applications can still trigger the reserve guard.
+
+The cache remains session-only: normal stop, source replacement and leaving the app remove it. Persistent watch history is independent and survives this cleanup.
 
 Lookahead is limited to 8 MiB / 32 pieces, connections to 32, and Media3's target compressed-data buffer to 16 MiB. Torrent metadata is limited to 2 MiB, 4,096 files, 262,144 pieces, and an 8 MiB piece size. Symlinks, unsafe paths, and duplicate paths are rejected. These limits do not represent a bound on total process memory.
 
 Magnet metadata and demanded-piece waits time out after 90 seconds; torrent-document reads time out after 60 seconds. Internet sources may be unavailable or slow. Containers are filtered to MP4/M4V/MKV/WebM/TS/MOV/MPG/MPEG, but codec support still depends on Media3 and the device. No video transcoding is performed.
 
+Rolling-cache verification on WK03K used a temporary **32 MiB** limit to force eviction with WebTorrent's **129,241,752-byte Sintel video**, whose torrent file offset is nonzero. A throwaway on-device reader streamed the entire file through `TorrentDataSource`, repeatedly observed allocation below the limit, then sought back to zero and compared the re-downloaded first 65,536 bytes byte-for-byte. It passed. A separate actual-Media3 run at 8× speed performed 16 evictions, sought from 603,298 ms back to zero, rendered a new first frame at zero, and subsequently reached `ENDED`; screenshots showed real video and the cache overlay, and remote pause/resume worked. The largest logged pre-eviction budgeted allocation was **33,411,072 bytes**, below the **33,554,432-byte** limit.
+
+The player's throwaway secondary completion listener timed out waiting for completion, although production logs recorded `ENDED`, player release and native shutdown. Completion was independently confirmed from those logs, not by that observer's exit status. The smoke runners and small-limit override were removed afterward. Native block reclamation, retained-byte integrity and the full-stream backseek were exercised on the projector filesystem; unsupported-filesystem and competing-app low-space failures were not injected. No new audible-output claim is made.
+
+The final 4 GiB build passed `assembleDebug`, `testDebugUnitTest` and `lintDebug`, including nine rolling-window/file-range regression tests. Final installation checks exposed and fixed an Activity-recreation race: cleanup from an old engine could delete a new engine's cache directory. Engines now share a serialized directory lease. Four rapid open/finish/reopen cycles then loaded metadata without errors. The final build rendered Sintel with 1,708,696 of 129,241,752 bytes available, advanced beyond 34 seconds, displayed the 4.00 GiB limit, and stopped/removed the session cache on Home.
+
 ## Implementation
 
-`TorrentEngine` owns a single cancellable session and input loading. `NativeTorrent` owns native handles, validates metadata, selects the video, and changes piece priorities around the requested position. `TorrentDataSource` maps file-relative reads to global torrent piece boundaries and waits for hash verification **and completed disk writes** before reading; it never returns sparse-file holes as video data. Media3 uses this data source directly, not a separate HTTP server.
+`TorrentEngine` owns a single cancellable session and input loading. `NativeTorrent` owns native handles, validates metadata, selects the video, accounts admitted pieces and performs rolling eviction. `RollingPieceWindow` bounds the union of all admitted pieces, including abandoned partial requests. `SparseFiles` provides 64-bit ARM-safe hole punching and filesystem capability checks through a small JNI library. `TorrentDataSource` maps file-relative reads to global piece boundaries and delegates reads to `NativeTorrent`, which waits for hash verification **and completed disk writes**, then reads under the same lock used by eviction. Media3 uses this data source directly, not a separate HTTP server.
 
 `MainActivity` hosts the Compose source/file screens and Media3's native video surface. Its `singleTask` launch mode routes external links to the same activity, preventing competing engines from sharing the session cache. TV keys are mapped explicitly to playback actions because Compose/native-view focus is not sufficient for reliable remote control on the target device. The player is released before torrent shutdown.
 
@@ -170,7 +183,7 @@ The final build also exercised an explicit empty-results state, detail-to-result
 
 Use English for all documentation and code comments. Work in task branches; code and related documentation go through PRs into `main`. The only direct initialization commit was empty. PRs report checks actually performed and known limitations. Add tests for meaningful behavior and regressions, not coverage targets; device playback verification remains necessary.
 
-Next product work: bounded rolling storage and automatic subtitle discovery. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
+Next product work: automatic subtitle discovery. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
 
 ### Resuming in a new agent session
 
