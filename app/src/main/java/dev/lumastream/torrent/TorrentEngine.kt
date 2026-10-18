@@ -46,12 +46,18 @@ internal const val DISK_RESERVE = 1024L * 1024 * 1024
 internal const val LOOKAHEAD_BYTES = 8L * 1024 * 1024
 
 class TorrentEngine(context: Context) : Closeable {
+    private companion object {
+        // Activity recreation can leave an old ViewModel closing asynchronously.
+        // All engines share this directory, so its lease must outlive any one ViewModel.
+        val lifecycle = Mutex()
+        var directoryOwner: TorrentEngine? = null
+    }
+
     private val app = context.applicationContext
     private val directory = File(app.cacheDir, "torrent-session")
     private val mutableState = MutableStateFlow(TorrentState())
     val state: StateFlow<TorrentState> = mutableState.asStateFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val lifecycle = Mutex()
     private val requests = Any()
     private var generation = 0L
     private var opening: Job? = null
@@ -72,7 +78,8 @@ class TorrentEngine(context: Context) : Closeable {
             withContext(Dispatchers.IO) {
                 lifecycle.withLock {
                     checkTicket(ticket)
-                    disposeActive()
+                    directoryOwner?.disposeActive()
+                    directoryOwner = this@TorrentEngine
                     try {
                         prepareDirectory()
                         mutableState.value = TorrentState(message = "Opening torrent…")
@@ -82,11 +89,11 @@ class TorrentEngine(context: Context) : Closeable {
                         } else {
                             loadTorrent(readMetadata(uri))
                         }
-                        val torrent = NativeTorrent(directory) { owner, message ->
+                        val torrent = NativeTorrent(directory, onFailure = { owner, message ->
                             if (active === owner && !owner.invalidated) {
                                 mutableState.update { it.copy(message = "Torrent error", error = message) }
                             }
-                        }
+                        })
                         active = torrent
                         owned = torrent
                         try {
@@ -211,6 +218,7 @@ class TorrentEngine(context: Context) : Closeable {
     }
 
     private fun disposeActive() {
+        if (directoryOwner !== this) return
         val old = active
         active = null
         old?.shutdown()
@@ -220,6 +228,7 @@ class TorrentEngine(context: Context) : Closeable {
             mutableState.update { it.copy(message = "Cleanup error", error = message) }
             throw IOException(message)
         }
+        directoryOwner = null
     }
 
     private suspend fun monitor(torrent: NativeTorrent) {
@@ -227,7 +236,10 @@ class TorrentEngine(context: Context) : Closeable {
             try {
                 val snapshot = torrent.snapshot()
                 if (active === torrent && !torrent.invalidated) {
-                    mutableState.update { it.copy(peers = snapshot.first, downloadedBytes = snapshot.second) }
+                    mutableState.update {
+                        it.copy(peers = snapshot.peers, downloadedBytes = snapshot.downloadedBytes,
+                            cacheBytes = snapshot.cacheBytes, cacheLimitBytes = snapshot.cacheLimit)
+                    }
                 }
             } catch (failure: Exception) {
                 if (torrent.invalidated) return
