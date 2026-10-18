@@ -4,11 +4,13 @@ An Android TV application for playing torrents before the download completes, in
 
 ## Download
 
-The first signed preview is [v0.1.0](https://github.com/valdisd96/lumastream/releases/tag/v0.1.0). Download `lumastream-0.1.0-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
+The latest signed preview is [v0.2.0](https://github.com/valdisd96/lumastream/releases/tag/v0.2.0). Download `lumastream-0.2.0-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
 
-Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.1.0-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.2.0-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
 
 The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
+
+Version 0.2.0 has `versionCode=2` and uses the same release certificate as 0.1.0. Install it over the signed 0.1.0 release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible.
 
 ## Current functionality
 
@@ -97,19 +99,23 @@ With `JAVA_HOME` and `ANDROID_HOME` configured as above:
 ./gradlew assembleRelease testReleaseUnitTest lintRelease
 TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 SIGNING="$HOME/.config/lumastream/signing"
-OUT=".local/release-v0.1.0"
+OUT=".local/release-v0.2.0"
 mkdir -p "$OUT"
 "$TOOLS/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$OUT/aligned.apk"
 "$TOOLS/apksigner" sign \
   --ks "$SIGNING/release.p12" --ks-key-alias lumastream \
   --ks-pass "file:$SIGNING/store-password" \
-  --out "$OUT/lumastream-0.1.0-armeabi-v7a.apk" "$OUT/aligned.apk"
-"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.1.0-armeabi-v7a.apk"
-"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.1.0-armeabi-v7a.apk"
-(cd "$OUT" && shasum -a 256 lumastream-0.1.0-armeabi-v7a.apk > SHA256SUMS)
+  --out "$OUT/lumastream-0.2.0-armeabi-v7a.apk" "$OUT/aligned.apk"
+"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.2.0-armeabi-v7a.apk"
+"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.2.0-armeabi-v7a.apk"
+(cd "$OUT" && shasum -a 256 lumastream-0.2.0-armeabi-v7a.apk > SHA256SUMS)
 ```
 
 Release certificate SHA-256: `c113d8eb54f1eb4cdfe327612236e7dbd7cedce27ab9235a4f4938ad01e35f70`.
+
+For v0.2.0, `assembleRelease`, all 78 release unit tests and `lintRelease` passed. The distribution APK passed signature/alignment checks with the original certificate, has package `dev.lumastream`, version code 2 and version name 0.2.0, is non-debuggable, contains only ARMv7 native libraries and bundled notices, and was checked for absence of the owner's private TMDB and OpenSubtitles credentials.
+
+Upgrade verification on WK03K used separately identified, non-debuggable 0.1.0 and 0.2.0 builds signed with the release key (`dev.lumastream.upgradesmoke`) to preserve the owner's debug installation. Installing 0.2.0 over 0.1.0 retained the exact configuration/history bytes, package UID and original installation time. The upgraded app loaded the test token/provider settings, Russian catalog language and Sintel resume position of 123000 ms; new subtitle/audio preferences initialized to English/Original. Actual resumed playback rendered its first frame at exactly 123000 ms with 4,330,136 of 129,241,752 bytes downloaded, advanced to 133007 ms and stopped normally with native shutdown. Screenshots verified the history card, settings, rendered video and updated progress. The temporary apps, runner and build override were removed. This verifies the release-mode upgrade/data path under an isolated application ID, not installation of the published package over the owner's incompatible debug signature; no new audible-output claim is made.
 
 For v0.1.0, `assembleRelease`, all 24 release unit tests and `lintRelease` passed. The distribution APK passed signature/alignment checks, contains only ARMv7 native libraries and bundled third-party notices, is not debuggable, and was checked for absence of the owner's private TMDB token. On WK03K, a separately built release-mode copy signed with the same key and temporary application ID `dev.lumastream.releasesmoke` exercised fresh Home, external Sintel input, video selection, actual video rendering, advancing playback and normal native-session shutdown. First frame arrived with 2,626,200 of 129,241,752 bytes downloaded; playback reached 29,261 ms before stopping. The temporary app was removed without replacing the owner's debug installation. This checks release-mode runtime behavior, not installation of the exact distribution APK over a differently signed app; no new audible-sound claim is made.
 

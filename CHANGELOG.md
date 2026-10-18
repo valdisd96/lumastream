@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-18 (pre-release)
 
+- Published a signed ARMv7 update with version code 2, the original release certificate and SHA-256 checksum.
+- Verified release build, 78 release unit tests, lint, signature/alignment, non-debuggable packaging and absence of private TMDB/OpenSubtitles credentials. An isolated signed release-mode 0.1.0 → 0.2.0 upgrade preserved settings/history bytes and resumed Sintel at 123000 ms on WK03K; the owner's debug installation was untouched.
 - Added explicit next-episode navigation in series player controls and after completion, refreshing TMDB episode identity across season boundaries without autoplay, with series-end, retry and Back-to-season handling.
 - Added focused source recovery after catalog opening/playback failures, preserving the movie/episode context and requested/current position, with explicit transfer or restart on replacement and the existing catalog Back path.
 
