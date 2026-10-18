@@ -5,14 +5,25 @@ import androidx.media3.datasource.DataSource
 
 data class TorrentFile(val index: Int, val name: String, val size: Long)
 
+enum class RequiredDataStatus { IDLE, DOWNLOADING, VERIFYING, WRITING }
+
 data class TorrentState(
     val message: String = "Ready",
     val files: List<TorrentFile> = emptyList(),
+    /** Unique verified selected-video bytes this selection, including subsequently evicted data. */
     val downloadedBytes: Long = 0,
+    /** Native payload rate, including lookahead/re-downloads but excluding protocol overhead. */
+    val downloadBytesPerSecond: Long = 0,
     val totalBytes: Long = 0,
     val cacheBytes: Long = 0,
     val cacheLimitBytes: Long = 0,
     val peers: Int = 0,
+    /** Only the piece blocking a reader, never rolling-cache fullness. */
+    val requiredPieceIndex: Int? = null,
+    val requiredBlocksLoaded: Int = 0,
+    val requiredBlockCount: Int = 0,
+    val requiredWaitMillis: Long = 0,
+    val requiredDataStatus: RequiredDataStatus = RequiredDataStatus.IDLE,
     val error: String? = null,
 )
 

@@ -26,7 +26,11 @@ internal class TorrentDataSource(
         if (opened) close()
         transferInitializing(dataSpec)
         if (dataSpec.uri != playbackUri) throw IOException("This torrent data source cannot open a different video")
-        torrent.ensureSelection(selection)
+        try {
+            torrent.ensureSelection(selection)
+        } catch (error: IOException) {
+            throw sourceException(error)
+        }
         if (dataSpec.position < 0 || dataSpec.position > selection.video.file.size) {
             throw DataSourceException(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
         }
@@ -34,16 +38,9 @@ internal class TorrentDataSource(
         position = dataSpec.position
         val available = selection.video.file.size - position
         remaining = if (dataSpec.length == C.LENGTH_UNSET.toLong()) available else minOf(available, dataSpec.length)
-        try {
-            if (remaining > 0) torrent.demand(selection, position)
-            opened = true
-            transferStarted(dataSpec)
-            return remaining
-        } catch (error: IOException) {
-            closed = true
-            if (error !is InterruptedIOException) torrent.fail(error.message ?: "Cannot open torrent video")
-            throw error
-        }
+        opened = true
+        transferStarted(dataSpec)
+        return remaining
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
@@ -62,11 +59,16 @@ internal class TorrentDataSource(
             return bytes
         } catch (error: IOException) {
             if (!closed && !Thread.currentThread().isInterrupted && error !is InterruptedIOException) {
-                torrent.fail(error.message ?: "Unable to read torrent video")
+                torrent.fail(error)
             }
-            throw error
+            throw sourceException(error)
         }
     }
+
+    private fun sourceException(error: IOException): IOException =
+        if (error is TorrentReadTimeoutException && error.waitingForNetwork) {
+            DataSourceException(error, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)
+        } else error
 
     override fun getUri(): Uri? = if (opened) playbackUri else null
 
