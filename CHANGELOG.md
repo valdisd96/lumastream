@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-10-18 (pre-release)
 
 - Added advisory source-card warnings for stereoscopic labels, unavailable advertised decoders and dimensions beyond device decoder capabilities; ambiguous provider metadata remains unknown and sources stay selectable.
 - Added actionable playback error categories and available renderer format details while preserving underlying data-read errors.
