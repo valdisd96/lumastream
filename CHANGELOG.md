@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-10-18 (pre-release)
+
+- Published the first signed ARMv7 APK for Android TV 9+, with a SHA-256 checksum and a persistent release certificate; documented local signing, installation, debug-to-release migration, and key-backup requirements.
+- Verified release build, 24 release unit tests, lint, APK signature/alignment, non-debuggable packaging, and absence of the owner's private TMDB token. A separately identified release-mode app signed with the release key rendered Sintel on WK03K before full download and stopped normally; the existing debug app was preserved.
+- Reviewed the rendered Internet Archive terms, privacy and copyright policies and documented the scholarship/research-only access restriction; this is not legal clearance.
 
 - Added bounded rolling torrent storage (up to 4 GiB with a 1 GiB free-space reserve), conservative accounting of incomplete requests, safe sparse-block eviction after native IO shutdown, and re-download of evicted pieces on backward seeks. Videos no longer require free space for their full contents.
 - Added ARMv7 sparse-storage JNI with a filesystem capability/integrity probe, cache budget display, nine window/mapping regression tests, and pinned NDK/CMake build dependencies.
