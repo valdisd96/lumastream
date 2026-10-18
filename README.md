@@ -121,8 +121,8 @@ During playback:
 
 | Key | Action |
 | --- | --- |
-| OK / Enter | Pause/resume, or open the focused CC/settings button |
-| Left / Right | Seek -10 / +30 seconds; in the bottom action row, select CC / settings |
+| OK / Enter | Pause/resume, or activate the focused CC/settings/next-episode control |
+| Left / Right | Seek -10 / +30 seconds; while navigating actions, move between CC, settings and next episode (series only) |
 | Up | Open subtitles; from the bottom action row, return to playback controls |
 | Down | Focus the bottom action row, starting on settings |
 | Back | Dismiss a menu, leave the bottom action row, or stop playback and return to the catalog |
@@ -130,6 +130,8 @@ During playback:
 Back from details, episodes, sources, Archive or Settings returns to the preceding catalog screen. During search editing it dismisses the keyboard/editor first. **Back on Home outside editing closes the activity and removes its task**, returning to the TV launcher rather than opening a second input screen. The remote Home key also backgrounds the app and stops its torrent session. Playback and native resources are released on exit.
 
 To open the visible subtitle icon with the remote, press **Down → Left → OK**. For audio tracks or speed, press **Down → OK**. The bottom action row stays visible while navigating; Up or Back leaves that row and restores normal seeking/pause shortcuts. Opening CC/settings exits pinned action navigation; closing a menu restores automatic control hiding during playback. Paused controls remain visible.
+
+For a catalog series episode, press **Down → Right → OK** to activate the visible next-episode icon beside the seek controls. This stops the current video and opens source selection for the next listed episode; it never starts another video automatically. Movies and external torrents do not offer this action.
 
 Verified on WK03K after the CC focus correction: Down/Left visibly focused CC, OK opened the subtitle menu, Back/Right/OK opened settings, and Up restored pause/seek behavior. Back from the action row retained the paused video; a subsequent Back stopped playback. Build and lint passed.
 
@@ -150,6 +152,14 @@ Catalog opening/playback failures now offer a remote-focused **Choose another so
 Recovery verification on WK03K: build, unit tests and lint passed. A throwaway device runner opened an invalid-hash catalog source with a requested position of `123000` ms, activated the focused recovery button via the remote dispatcher, and displayed real Sintel source results. The replacement confirmation retained `123000` ms; selecting the legal WebTorrent Sintel source through the production model rendered its first frame at exactly `123000` ms with 3,543,704 of 129,241,752 bytes downloaded, then advanced beyond 133 seconds. Screenshots confirmed the error, sources, transfer dialog, video and Home after Back; logs confirmed native shutdown. Forced mid-playback network/decoder failures and series recovery were not exercised in this smoke run. The temporary instrumentation was removed.
 
 Verified on WK03K: `assembleDebug`, `testDebugUnitTest` and `lintDebug` passed, including eight history regression tests. Catalog-selected Sintel rendered, was sought/paused and backgrounded, and persisted position `53481` ms. After terminating the already-backgrounded process and relaunching, Home displayed the saved card; Continue rendered its first frame at exactly `53481` ms and advanced beyond 62 seconds. Start from beginning rendered at `0` ms. History's alternate-source action loaded Sintel sources and selecting another source displayed the explicit transfer warning. Seeking to the end produced `ENDED`, stopped the native session, and displayed **Watched** on Home. Screenshots verified the Home card, resume dialog, transfer warning, resumed video and finished card. Episode identity/roundtrip are unit-tested; live series resume and audible output were not independently verified in this run.
+
+### Next episode
+
+Catalog series playback offers **Next episode** both in the player controls and as the focused action after natural completion. Selecting it refreshes TMDB details and season episodes in the configured catalog language, then opens sources for the next listed episode. Numbering gaps and empty seasons are handled without assuming `episode + 1` or contiguous seasons. Regular episodes advance to the next numbered season; specials advance only within Season 0 because their chronological relationship to regular episodes is ambiguous.
+
+No listed successor produces **No next episode is listed by TMDB**, with Refresh episodes and Back to seasons. Network/provider failures use the normal visible error and Retry flow rather than being treated as the end of a series. Leaving the catalog request cancels it. Back from the resulting source list shows that episode's season, then the series details/seasons. The user must select a source; any resume prompt belongs to the new episode's own history, never the previous episode's position. Future listed episodes may have no sources; metadata is not an availability guarantee.
+
+Verified on WK03K: build, unit tests and lint passed, including six new resolver regression tests for numbering gaps, empty/noncontiguous seasons, series end, specials, missing season identity and error/cancellation propagation. A temporary device runner attached real Breaking Bad episode-navigation metadata to legal Sintel playback without changing the playback/history identity or downloading the series. Remote Down/Right/OK opened S1E2 sources from S1E1; actual Media3 `ENDED` retained the focused completion action, which opened S2E1 sources from S1E7. S5E16 displayed the no-next-episode state. Screenshots verified player focus, completion, exact source identities, final-episode state and Back to episodes/seasons. No autoplay occurred; native shutdown was logged. Actual series-file playback and forced live TMDB/provider failures were not exercised in this run. The temporary instrumentation was removed.
 
 ### Subtitles
 
@@ -245,7 +255,7 @@ The final build also exercised an explicit empty-results state, detail-to-result
 
 Use English for all documentation and code comments. Work in task branches; code and related documentation go through PRs into `main`. The only direct initialization commit was empty. PRs report checks actually performed and known limitations. Add tests for meaningful behavior and regressions, not coverage targets; device playback verification remains necessary.
 
-Next product work: next-episode navigation. Compliant public OpenSubtitles application-key provisioning remains separate from the verified private developer setup. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
+Compliant public OpenSubtitles application-key provisioning remains separate from the verified private developer setup. Provider-reported seeds and resolution are not availability or decoder-compatibility guarantees. Exhaustive search across all torrents is not promised.
 
 ### Resuming in a new agent session
 
