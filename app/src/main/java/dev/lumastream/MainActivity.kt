@@ -438,6 +438,8 @@ data class PlaybackScreenState(
     val historyError: String? = null,
     val resumeSelection: CatalogSelection? = null,
     val resumeEntry: WatchEntry? = null,
+    val recoveryEntry: WatchEntry? = null,
+    val recoveryRequested: Boolean = false,
     val subtitleDelayMs: Long = 0,
     val subtitleMessage: String? = null,
 )
@@ -483,7 +485,8 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             historyReady.await()
             val key = WatchEntry(selection, 0, 0, 0, false).key
-            val previous = screen.value.history.firstOrNull { it.key == key }
+            val previous = screen.value.recoveryEntry?.takeIf { it.key == key }
+                ?: screen.value.history.firstOrNull { it.key == key }
             if (previous != null) {
                 mutableScreen.update { it.copy(resumeSelection = selection, resumeEntry = previous) }
             } else {
@@ -505,6 +508,24 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
     fun resume(entry: WatchEntry, startOver: Boolean) {
         openCatalog(entry.selection, if (startOver || entry.completed) 0 else entry.positionMs)
+    }
+
+    fun recoverSource() {
+        if (screen.value.busy || screen.value.recoveryEntry == null) return
+        mutableScreen.update { it.copy(page = AppPage.CATALOG, recoveryRequested = true) }
+    }
+
+    fun consumeRecoveryRequest() {
+        mutableScreen.update { it.copy(recoveryRequested = false) }
+    }
+
+    private fun captureRecoveryPosition() {
+        val entry = screen.value.recoveryEntry ?: return
+        val player = screen.value.player ?: return
+        if (renderedVideo) mutableScreen.update {
+            it.copy(recoveryEntry = entry.copy(positionMs = player.currentPosition.coerceAtLeast(0),
+                durationMs = player.duration.coerceAtLeast(0), completed = false))
+        }
     }
 
     fun loadSubtitle(uri: Uri) = subtitles.loadUri(uri)
@@ -576,6 +597,10 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     private fun openCatalog(selection: CatalogSelection, positionMs: Long = 0) {
         navigate(AppPage.PLAYER)
         releasePlayer()
+        mutableScreen.update {
+            it.copy(recoveryEntry = WatchEntry(selection, positionMs, 0, System.currentTimeMillis(), false),
+                recoveryRequested = false)
+        }
         runCommand {
             historyReady.await()
             val magnet = catalogMagnet(selection.source)
@@ -585,6 +610,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
             engine.open(magnet)
             val selected = selectCatalogFile(selection, engine.state.value.files)
             val resolved = selection.copy(source = selection.source.copy(fileIndex = selected.index, filename = selected.name))
+            mutableScreen.update { it.copy(recoveryEntry = it.recoveryEntry?.copy(selection = resolved)) }
             startVideo(selected.index, resolved, positionMs)
         }
     }
@@ -607,6 +633,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
     fun open(uri: Uri) {
         navigate(AppPage.PLAYER)
+        mutableScreen.update { it.copy(recoveryEntry = null, recoveryRequested = false) }
         when (uri.scheme?.lowercase(Locale.ROOT)) {
             "magnet", "https", "content", "file" -> Unit
             else -> {
@@ -696,6 +723,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
                 override fun onPlayerError(error: PlaybackException) {
                     Log.e(PLAYER_TAG, "playback_error code=${error.errorCodeName}", error)
+                    captureRecoveryPosition()
                     stop("Playback stopped after an error.", playbackErrorMessage(error))
                 }
 
@@ -730,6 +758,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
     fun stop(notice: String = "Stopped. Open a source to play again.", error: String? = null) {
         releasePlayer()
+        if (error == null) mutableScreen.update { it.copy(recoveryEntry = null, recoveryRequested = false) }
         runCommand {
             mutableScreen.update { it.copy(busy = true, notice = notice, error = error, title = "") }
             engine.stop()
@@ -747,6 +776,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                 mutableScreen.update { it.copy(notice = "Operation cancelled.") }
                 throw cancelled
             } catch (failure: Exception) {
+                captureRecoveryPosition()
                 releasePlayer()
                 Log.e(PLAYER_TAG, "operation_failed", failure)
                 mutableScreen.update { it.copy(error = failure.message ?: "Unable to open or play this torrent.", notice = null) }
@@ -804,6 +834,8 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                 history = screen.history,
                 historyError = screen.historyError,
                 onResume = model::resume,
+                recoverySelection = screen.recoveryEntry?.selection?.takeIf { screen.recoveryRequested },
+                onRecoveryConsumed = model::consumeRecoveryRequest,
             )
             val entry = screen.resumeEntry
             val selection = screen.resumeSelection
@@ -892,7 +924,10 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("LumaStream", color = Color.White, fontSize = 30.sp)
-                RemoteButton("Back to search", modifier = Modifier.focusRequester(backFocus), onClick = ::returnToCatalog)
+                val recovery = screen.error != null && screen.recoveryEntry != null
+                RemoteButton(if (recovery) "Choose another source" else "Back to search",
+                    modifier = Modifier.focusRequester(backFocus), enabled = !recovery || !screen.busy,
+                    onClick = if (recovery) model::recoverSource else ::returnToCatalog)
             }
         }
         item {
@@ -909,7 +944,10 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                 }
                 (screen.error ?: torrent.error)?.let {
                     Text(it, color = Color(0xFFFFA6A6), fontSize = 16.sp)
-                    Text("Return to search and choose another source.", color = Color(0xFFBCC5D7), fontSize = 14.sp)
+                    Text(if (screen.recoveryEntry != null)
+                        "Choose another source for the same title or episode. You can transfer the saved position or start over."
+                        else "Return to search and choose another source.",
+                        color = Color(0xFFBCC5D7), fontSize = 14.sp)
                 }
             }
         }

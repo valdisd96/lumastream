@@ -256,6 +256,16 @@ private class MovieCatalogViewModel : ViewModel() {
         loadSources()
     }
 
+    fun recoverSources(selection: CatalogSelection) {
+        val current = state.value
+        if (current.route == CatalogRoute.SOURCES && current.details == selection.details &&
+            current.episode == selection.episode) {
+            loadSources()
+        } else {
+            findHistorySources(selection)
+        }
+    }
+
     private fun loadSources() {
         val client = provider ?: return
         val current = state.value
@@ -313,6 +323,8 @@ fun MovieCatalogScreen(
     onArchive: () -> Unit,
     onBack: () -> Unit,
     onOpenSource: (CatalogSelection) -> Unit,
+    recoverySelection: CatalogSelection?,
+    onRecoveryConsumed: () -> Unit,
 ) {
     val model: MovieCatalogViewModel = viewModel(factory = remember {
         object : ViewModelProvider.Factory {
@@ -355,6 +367,13 @@ fun MovieCatalogScreen(
         onDispose {
             lifecycle.removeObserver(observer)
             model.deactivate()
+        }
+    }
+
+    LaunchedEffect(recoverySelection) {
+        recoverySelection?.let {
+            model.recoverSources(it)
+            onRecoveryConsumed()
         }
     }
 
