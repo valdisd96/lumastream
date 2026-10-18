@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added matching torrent SRT/VTT discovery, preferred-language auto-selection and manual candidate selection, with bounded verified auxiliary reads that preserve the active video and rolling-cache budget.
+- Added explicit-button OpenSubtitles search/download with video-hash and release matching, strict language/episode checks, quota/rate-limit handling and linked attribution. Developer application-consumer setup is required; public anonymous distribution requires a compliant provider plan.
+- Added persisted subtitle-language and original-audio preferences, preserving TMDB original-language metadata through watch history.
+- Persisted subtitle correction by exact torrent/video and embedded-track or external-content identity, with bounded atomic storage and reset removal.
+- Fixed imported-subtitle switching/seeking during an already-active cue by retaining the complete bounded text timeline without changing the audio/video clock.
 - Separated actual torrent download speed, unique verified-video progress, required-piece loading stages and Media3 buffered time from rolling-cache usage; playback status hides with the controls.
 - Made demanded-piece waits progress-aware with a finite hard cap, serialized overlapping readers' demand/wait/read operations, and preserved underlying network/disk source errors.
 - Added Choose episode to series history cards, with season/episode/source navigation and Back returning to the originating Home card.

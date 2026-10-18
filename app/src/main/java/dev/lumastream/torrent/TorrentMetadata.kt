@@ -16,7 +16,8 @@ internal const val MAX_METADATA_BYTES = 2 * 1024 * 1024
 internal const val MAX_PIECES = 262_144
 internal const val MAX_PIECE_BYTES = 8 * 1024 * 1024
 
-internal data class VideoFile(val file: TorrentFile, val path: File, val torrentOffset: Long)
+internal data class TorrentFileEntry(val file: TorrentFile, val path: File, val torrentOffset: Long)
+internal data class TorrentMediaFiles(val videos: List<TorrentFileEntry>, val subtitles: List<TorrentFileEntry>)
 
 internal fun loadTorrent(bytes: ByteArray): AddTorrentParams {
     val buffer = Vectors.bytes2byte_vector(bytes)
@@ -43,7 +44,7 @@ internal fun loadTorrent(bytes: ByteArray): AddTorrentParams {
     }
 }
 
-internal fun videoFiles(info: TorrentInfo, directory: File): List<VideoFile> {
+internal fun mediaFiles(info: TorrentInfo, directory: File): TorrentMediaFiles {
     if (!info.isValid || info.numFiles() !in 1..4096 ||
         info.numPieces() !in 1..MAX_PIECES || info.pieceLength() !in 1..MAX_PIECE_BYTES
     ) {
@@ -74,7 +75,8 @@ internal fun videoFiles(info: TorrentInfo, directory: File): List<VideoFile> {
     val storage = info.files()
     val root = directory.canonicalPath + File.separator
     val paths = HashSet<String>()
-    val result = ArrayList<VideoFile>()
+    val videos = ArrayList<TorrentFileEntry>()
+    val subtitles = ArrayList<TorrentFileEntry>()
     for (index in 0 until storage.numFiles()) {
         val path = storage.filePath(index)
         val flags = storage.fileFlags(index)
@@ -95,12 +97,16 @@ internal fun videoFiles(info: TorrentInfo, directory: File): List<VideoFile> {
         val offset = storage.fileOffset(index)
         if (size < 0 || offset < 0 || size > Long.MAX_VALUE - offset) throw IOException("Invalid file size")
         val extension = path.substringAfterLast('.', "").lowercase(Locale.ROOT)
-        if (!storage.padFileAt(index) && size > 0 && extension in VIDEO_EXTENSIONS) {
-            result += VideoFile(TorrentFile(index, path, size), target, offset)
+        if (!storage.padFileAt(index) && size > 0) {
+            if (extension in VIDEO_EXTENSIONS) {
+                videos += TorrentFileEntry(TorrentFile(index, path, size), target, offset)
+            } else if ((extension == "srt" || extension == "vtt") && size <= MAX_TORRENT_SUBTITLE_BYTES) {
+                subtitles += TorrentFileEntry(TorrentFile(index, path, size), target, offset)
+            }
         }
     }
-    if (result.isEmpty()) throw IOException("No supported video files found in this torrent")
-    return result
+    if (videos.isEmpty()) throw IOException("No supported video files found in this torrent")
+    return TorrentMediaFiles(videos, subtitles)
 }
 
 private val VIDEO_EXTENSIONS = setOf("mp4", "m4v", "mkv", "webm", "ts", "mov", "mpg", "mpeg")

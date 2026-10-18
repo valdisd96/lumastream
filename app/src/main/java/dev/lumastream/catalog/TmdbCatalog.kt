@@ -103,7 +103,8 @@ class TmdbCatalog(private val token: String, private val language: String) {
         if (id <= 0 || (name.isEmpty() && original.isEmpty())) throw IOException("TMDB title identity is missing.")
         val date = data.catalogText(if (movie) "release_date" else "first_air_date", 10)
         return CatalogTitle(id, kind, name.ifEmpty { original }, original, date.take(4).takeIf { YEAR.matches(it) }.orEmpty(),
-            data.catalogText("overview", 16_384), image(data, "poster_path"), image(data, "backdrop_path"))
+            data.catalogText("overview", 16_384), image(data, "poster_path"), image(data, "backdrop_path"),
+            data.catalogText("original_language", 16).takeIf { ORIGINAL_LANGUAGE.matches(it) })
     }
 
     private fun image(data: JSONObject, key: String): String? = data.catalogText(key, 256)
@@ -121,6 +122,7 @@ class TmdbCatalog(private val token: String, private val language: String) {
         const val MAX_PAGES = 500
         val IMDB = Regex("tt[0-9]{7,12}")
         val YEAR = Regex("[0-9]{4}")
+        val ORIGINAL_LANGUAGE = Regex("[a-z]{2,3}")
         val IMAGE_PATH = Regex("/[A-Za-z0-9_-]+\\.(jpg|png|webp)")
     }
 }

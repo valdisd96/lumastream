@@ -31,4 +31,11 @@ data class TorrentPlayback(
     val dataSourceFactory: DataSource.Factory,
     val uri: Uri,
     val title: String,
+    val videoIdentity: String,
+    val selectedFile: TorrentFile,
+    val subtitleCandidates: List<TorrentSubtitleCandidate>,
+    internal val selectionSerial: Long,
 )
+
+/** Obtained only on an explicit external-search request, never during playback setup. */
+data class TorrentMovieHashSample(val size: Long, val first: ByteArray, val last: ByteArray)
