@@ -1154,10 +1154,45 @@ private fun loadLabel(state: TorrentState): String = when (state.requiredDataSta
 
 private fun subtitleDelayLabel(delayMs: Long): String = String.format(Locale.US, "%+.1f s", delayMs / 1000.0)
 
+@androidx.annotation.OptIn(UnstableApi::class)
 private fun playbackErrorMessage(error: PlaybackException): String {
+    val reason = when (error.errorCode) {
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ->
+            "This device cannot decode the selected media format. Choose another source, preferably H.264/AVC with AAC audio."
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ->
+            "This source exceeds the device decoder's capabilities. Choose a lower-resolution, non-3D source."
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ->
+            "The device could not start its decoder. Try another source; if this also happens with previously playable videos, restart the device."
+        PlaybackException.ERROR_CODE_DECODING_FAILED ->
+            "The decoder failed while reading this video. The stream may be damaged or incompatible. Choose another source."
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ->
+            "This media container is not supported. Choose another source."
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ->
+            "The media container could not be read. It may be damaged. Choose another source."
+        PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
+            "The required media data could not be read. Check the source and connection; see the underlying cause below."
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED ->
+            "The device could not play this audio track. Try a source with different audio, preferably AAC."
+        else -> "Playback failed. Choose another source or retry."
+    }
+    val format = (error as? androidx.media3.exoplayer.ExoPlaybackException)?.rendererFormat
+    val media = format?.let {
+        buildList {
+            it.sampleMimeType?.let(::add)
+            it.codecs?.let(::add)
+            if (it.width > 0 && it.height > 0) add("${it.width}×${it.height}")
+        }.joinToString(" · ")
+    }?.takeIf(String::isNotBlank)
     val details = generateSequence<Throwable>(error) { it.cause }
         .take(8).mapNotNull { it.message?.trim()?.takeIf(String::isNotEmpty) }.distinct().toList()
-    return "Playback failed: ${error.errorCodeName}. ${details.joinToString(" · ")}"
+    return buildList {
+        add(reason)
+        media?.let { add("Media: $it") }
+        add("${error.errorCodeName}: ${details.joinToString(" · ")}")
+    }.joinToString("\n")
 }
 
 private fun formatBytes(bytes: Long): String = when {
