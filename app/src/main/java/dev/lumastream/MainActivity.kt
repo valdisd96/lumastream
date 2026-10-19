@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -88,6 +89,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import dev.lumastream.subtitle.ProviderSubtitle
 import dev.lumastream.torrent.TorrentSubtitleCandidate
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 private const val PLAYER_TAG = "LumaPlayer"
 
@@ -347,6 +355,7 @@ class MainActivity : ComponentActivity() {
 
     private fun dispatchPlaybackKeyEvent(event: KeyEvent): Boolean {
         val view = activePlayerView
+        if (model.screen.value.automaticStatus != null) return false
         val player = view?.player
         if (player != null && view.hasWindowFocus()) {
             if (navigatingPlayerActions) {
@@ -457,6 +466,8 @@ data class PlaybackScreenState(
     val historyError: String? = null,
     val resumeSelection: CatalogSelection? = null,
     val resumeEntry: WatchEntry? = null,
+    val resumeAutomaticSources: List<CatalogSelection> = emptyList(),
+    val automaticStatus: String? = null,
     val recoveryEntry: WatchEntry? = null,
     val recoveryRequested: Boolean = false,
     val episodeSelection: CatalogSelection? = null,
@@ -486,6 +497,11 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     private var historyWritable = false
     private var activeSelection: CatalogSelection? = null
     private var renderedVideo = false
+    private class StartupAttempt(val budget: AutomaticStartupBudget) {
+        val firstFrame = CompletableDeferred<Unit>()
+        var committed = false
+    }
+    private var startupAttempt: StartupAttempt? = null
 
     private fun saveProgress() {
         val player = screen.value.player ?: return
@@ -502,29 +518,50 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         historyWrites.trySend(entries)
     }
 
-    fun requestCatalog(selection: CatalogSelection) {
-        viewModelScope.launch {
+    fun requestCatalog(selection: CatalogSelection) = requestSources(listOf(selection), automatic = false)
+
+    fun requestAutomaticSources(selections: List<CatalogSelection>) {
+        if (selections.isNotEmpty()) requestSources(selections.take(4), automatic = true)
+    }
+
+    private fun requestSources(selections: List<CatalogSelection>, automatic: Boolean) {
+        cancelAutomaticPreparation()
+        dismissResume()
+        releasePlayer()
+        runCommand {
             historyReady.await()
+            val selection = selections.first()
             val key = WatchEntry(selection, 0, 0, 0, false).key
             val previous = screen.value.recoveryEntry?.takeIf { it.key == key }
                 ?: screen.value.history.firstOrNull { it.key == key }
             if (previous != null) {
-                mutableScreen.update { it.copy(resumeSelection = selection, resumeEntry = previous) }
+                engine.stop()
+                mutableScreen.update {
+                    it.copy(page = AppPage.CATALOG, resumeSelection = selection, resumeEntry = previous,
+                        resumeAutomaticSources = if (automatic) selections else emptyList())
+                }
+            } else if (automatic) {
+                startAutomaticSources(selections, 0)
             } else {
-                openCatalog(selection)
+                startCatalog(selection, 0)
             }
         }
     }
 
     fun dismissResume() {
-        mutableScreen.update { it.copy(resumeSelection = null, resumeEntry = null) }
+        mutableScreen.update { it.copy(resumeSelection = null, resumeEntry = null, resumeAutomaticSources = emptyList()) }
     }
 
     fun confirmResume(startOver: Boolean) {
         val selection = screen.value.resumeSelection ?: return
         val entry = screen.value.resumeEntry ?: return
+        val automatic = screen.value.resumeAutomaticSources
         dismissResume()
-        openCatalog(selection, if (startOver || entry.completed) 0 else entry.positionMs)
+        val position = if (startOver || entry.completed) 0 else entry.positionMs
+        if (automatic.isNotEmpty()) {
+            releasePlayer()
+            runCommand { startAutomaticSources(automatic, position) }
+        } else openCatalog(selection, position)
     }
 
     fun resume(entry: WatchEntry, startOver: Boolean) {
@@ -634,23 +671,104 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun openCatalog(selection: CatalogSelection, positionMs: Long = 0) {
-        navigate(AppPage.PLAYER)
+        cancelAutomaticPreparation()
         releasePlayer()
+        dismissResume()
+        runCommand { startCatalog(selection, positionMs) }
+    }
+
+    private suspend fun startCatalog(selection: CatalogSelection, positionMs: Long) {
+        navigate(AppPage.PLAYER)
         mutableScreen.update {
             it.copy(recoveryEntry = WatchEntry(selection, positionMs, 0, System.currentTimeMillis(), false),
-                recoveryRequested = false)
+                recoveryRequested = false, busy = true, error = null, notice = "Opening selected source…", title = "")
         }
-        runCommand {
-            historyReady.await()
-            val magnet = catalogMagnet(selection.source)
-            mutableScreen.update {
-                it.copy(busy = true, error = null, notice = "Opening selected source…", title = "")
-            }
-            engine.open(magnet)
-            val selected = selectCatalogFile(selection, engine.state.value.files)
-            val resolved = selection.copy(source = selection.source.copy(fileIndex = selected.index, filename = selected.name))
-            mutableScreen.update { it.copy(recoveryEntry = it.recoveryEntry?.copy(selection = resolved)) }
-            startVideo(selected.index, resolved, positionMs)
+        historyReady.await()
+        engine.open(catalogMagnet(selection.source))
+        val selected = selectCatalogFile(selection, engine.state.value.files)
+        val resolved = selection.copy(source = selection.source.copy(fileIndex = selected.index, filename = selected.name))
+        mutableScreen.update { it.copy(recoveryEntry = it.recoveryEntry?.copy(selection = resolved)) }
+        startVideo(selected.index, resolved, positionMs)
+    }
+
+    private suspend fun startAutomaticSources(selections: List<CatalogSelection>, positionMs: Long) {
+        navigate(AppPage.PLAYER)
+        mutableScreen.update {
+            it.copy(busy = true, error = null, notice = null,
+                recoveryEntry = WatchEntry(selections.first(), positionMs, 0, System.currentTimeMillis(), false),
+                recoveryRequested = false, automaticStatus = "Preparing automatic selection…")
+        }
+        val failure = runAutomaticStartup(
+            candidates = selections,
+            now = SystemClock::elapsedRealtime,
+            onAttempt = { index, count, budget ->
+                startupAttempt = StartupAttempt(budget)
+                mutableScreen.update {
+                    it.copy(automaticStatus = "Trying source $index of $count · Fetching metadata…", error = null)
+                }
+                Log.i(PLAYER_TAG, "auto_start attempt=$index count=$count elapsedMs=${budget.elapsed()}")
+            },
+            prepare = { selection ->
+                val attempt = checkNotNull(startupAttempt)
+                coroutineScope {
+                    val engineFailure = launch {
+                        engine.state.first { it.error != null }
+                        throw AutomaticStartupFailure("The torrent engine could not fetch metadata. Check connectivity and free storage, or choose another source.")
+                    }
+                    try {
+                        engine.open(catalogMagnet(selection.source))
+                        val file = selectCatalogFile(selection, engine.state.value.files)
+                        val resolved = selection.copy(source = selection.source.copy(fileIndex = file.index, filename = file.name))
+                        Log.i(PLAYER_TAG, "auto_metadata elapsedMs=${attempt.budget.elapsed()} attemptMs=${attempt.budget.attemptElapsed()}")
+                        resolved
+                    } finally {
+                        engineFailure.cancel()
+                    }
+                }
+            },
+            awaitFirstFrame = { selection ->
+                val attempt = checkNotNull(startupAttempt)
+                mutableScreen.update {
+                    it.copy(automaticStatus = it.automaticStatus?.substringBefore(" · ") + " · Waiting for first video frame…",
+                        recoveryEntry = WatchEntry(selection, positionMs, 0, System.currentTimeMillis(), false))
+                }
+                coroutineScope {
+                    val engineFailure = launch {
+                        engine.state.first { it.error != null }
+                        if (startupAttempt === attempt && !attempt.committed) {
+                            attempt.firstFrame.completeExceptionally(AutomaticStartupFailure(
+                                "The torrent engine could not read this source. Check connectivity and free storage, or choose another source."))
+                        }
+                    }
+                    try {
+                        startVideo(checkNotNull(selection.source.fileIndex), selection, positionMs, attempt)
+                        attempt.firstFrame.await()
+                    } finally {
+                        engineFailure.cancel()
+                    }
+                }
+            },
+            committed = { startupAttempt?.committed == true },
+            cleanup = {
+                startupAttempt = null
+                releasePlayer()
+                engine.stop()
+            },
+            onOutcome = { outcome, budget ->
+                Log.i(PLAYER_TAG, "auto_outcome result=$outcome elapsedMs=${budget.elapsed()} attemptMs=${budget.attemptElapsed()}")
+            },
+        )
+        startupAttempt = null
+        mutableScreen.update {
+            it.copy(automaticStatus = null, error = failure, notice = if (failure == null) null else "Automatic selection stopped. Choose manually to try other sources.")
+        }
+    }
+
+    fun chooseAutomaticSourceManually() {
+        val recovery = screen.value.recoveryEntry
+        stop()
+        mutableScreen.update {
+            it.copy(page = AppPage.CATALOG, recoveryEntry = recovery, recoveryRequested = recovery != null)
         }
     }
 
@@ -671,6 +789,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun open(uri: Uri) {
+        cancelAutomaticPreparation()
         navigate(AppPage.PLAYER)
         mutableScreen.update { it.copy(recoveryEntry = null, recoveryRequested = false) }
         when (uri.scheme?.lowercase(Locale.ROOT)) {
@@ -693,11 +812,13 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun select(index: Int) {
+        cancelAutomaticPreparation()
         releasePlayer()
         runCommand { startVideo(index) }
     }
 
-    private suspend fun startVideo(index: Int, selection: CatalogSelection? = null, positionMs: Long = 0) {
+    private suspend fun startVideo(index: Int, selection: CatalogSelection? = null, positionMs: Long = 0,
+        attempt: StartupAttempt? = null) {
             configurationReady.await()
             mutableScreen.update { it.copy(busy = true, error = null, notice = "Preparing video…") }
             val playback = engine.select(index)
@@ -724,6 +845,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
             }
             player.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (screen.value.player !== player) return
                     val name = when (playbackState) {
                         Player.STATE_IDLE -> "IDLE"
                         Player.STATE_BUFFERING -> "BUFFERING"
@@ -732,10 +854,23 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                         else -> playbackState.toString()
                     }
                     Log.i(PLAYER_TAG, "state=$name positionMs=${player.currentPosition}")
-                    if (playbackState == Player.STATE_ENDED && screen.value.player === player) finishPlayback()
+                    if (playbackState == Player.STATE_ENDED) {
+                        if (attempt != null && !attempt.committed) {
+                            attempt.firstFrame.completeExceptionally(AutomaticStartupFailure(
+                                "This source ended before displaying video. Choose another source."))
+                        } else finishPlayback()
+                    }
                 }
 
                 override fun onRenderedFirstFrame() {
+                    if (screen.value.player !== player || renderedVideo) return
+                    if (attempt != null) {
+                        if (startupAttempt !== attempt || attempt.firstFrame.isCompleted || attempt.budget.remaining() == 0L) return
+                        attempt.committed = true
+                        attempt.firstFrame.complete(Unit)
+                        mutableScreen.update { it.copy(automaticStatus = null, busy = false) }
+                        Log.i(PLAYER_TAG, "auto_first_frame elapsedMs=${attempt.budget.elapsed()} attemptMs=${attempt.budget.attemptElapsed()}")
+                    }
                     renderedVideo = true
                     saveProgress()
                     val transfer = engine.state.value
@@ -743,6 +878,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 override fun onTracksChanged(tracks: Tracks) {
+                    if (screen.value.player !== player) return
                     for (group in tracks.groups) {
                         for (index in 0 until group.length) {
                             if (group.isTrackSelected(index)) {
@@ -756,14 +892,25 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 
                 override fun onAudioSessionIdChanged(audioSessionId: Int) {
                     Log.i(PLAYER_TAG, "audio_session id=$audioSessionId")
+                    if (screen.value.player !== player) return
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (screen.value.player !== player) return
                     Log.i(PLAYER_TAG, "isPlaying=$isPlaying positionMs=${player.currentPosition}")
                     if (!isPlaying) saveProgress()
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
+                    if (screen.value.player !== player) return
+                    if (attempt != null && !attempt.committed) {
+                        if (startupAttempt === attempt) {
+                            Log.i(PLAYER_TAG, "auto_player_error code=${error.errorCodeName} elapsedMs=${attempt.budget.elapsed()}")
+                            attempt.firstFrame.completeExceptionally(AutomaticStartupFailure(
+                                "The device could not play this source (${error.errorCodeName}). Try H.264/AVC video with AAC audio."))
+                        }
+                        return
+                    }
                     Log.e(PLAYER_TAG, "playback_error code=${error.errorCodeName}", error)
                     captureRecoveryPosition()
                     stop("Playback stopped after an error.", playbackErrorMessage(error))
@@ -774,6 +921,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                     newPosition: Player.PositionInfo,
                     reason: Int,
                 ) {
+                    if (screen.value.player !== player) return
                     if (reason == Player.DISCONTINUITY_REASON_SEEK || reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT) {
                         val transfer = engine.state.value
                         Log.i(PLAYER_TAG, "seek fromMs=${oldPosition.positionMs} toMs=${newPosition.positionMs} reason=$reason downloadedBytes=${transfer.downloadedBytes} totalBytes=${transfer.totalBytes}")
@@ -798,7 +946,15 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
             }
     }
 
+    private fun cancelAutomaticPreparation() {
+        startupAttempt = null
+        mutableScreen.update { it.copy(automaticStatus = null) }
+    }
+
     fun stop(notice: String = "Stopped. Open a source to play again.", error: String? = null) {
+        startupAttempt = null
+        dismissResume()
+        mutableScreen.update { it.copy(automaticStatus = null) }
         releasePlayer()
         if (error == null) mutableScreen.update { it.copy(recoveryEntry = null, recoveryRequested = false) }
         runCommand {
@@ -810,14 +966,17 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     private fun runCommand(action: suspend () -> Unit) {
         val previous = command
         previous?.cancel()
-        command = viewModelScope.launch {
-            previous?.join()
+        val next = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            // Even a superseded waiter must drain its predecessor before its successor can open the engine.
+            withContext(NonCancellable) { previous?.join() }
+            currentCoroutineContext().ensureActive()
             try {
                 action()
             } catch (cancelled: CancellationException) {
-                mutableScreen.update { it.copy(notice = "Operation cancelled.") }
+                Log.i(PLAYER_TAG, "startup_cancelled")
                 throw cancelled
             } catch (failure: Exception) {
+                cancelAutomaticPreparation()
                 captureRecoveryPosition()
                 releasePlayer()
                 Log.e(PLAYER_TAG, "operation_failed", failure)
@@ -833,6 +992,8 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                 mutableScreen.update { it.copy(busy = false) }
             }
         }
+        command = next
+        next.start()
     }
 
     private fun releasePlayer() {
@@ -875,6 +1036,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                 onArchive = { model.navigate(AppPage.ARCHIVE) },
                 onBack = onExit,
                 onOpenSource = model::requestCatalog,
+                onAutoSources = model::requestAutomaticSources,
                 history = screen.history,
                 historyError = screen.historyError,
                 onResume = model::resume,
@@ -894,15 +1056,17 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                         Text(selection.details.title.title, color = Color.White, fontSize = 24.sp)
                         val changedSource = !entry.selection.source.infoHash.equals(selection.source.infoHash, ignoreCase = true) ||
                             entry.selection.source.fileIndex != selection.source.fileIndex
+                        val automatic = screen.resumeAutomaticSources.isNotEmpty()
                         Text(
-                            if (changedSource) "Different source selected. Its cut or timing may differ. Transfer the saved position explicitly, or start from the beginning."
+                            if (automatic) "Automatic candidates may have different cuts or timing. Transfer the saved position to every attempted source explicitly, or start each from the beginning."
+                            else if (changedSource) "Different source selected. Its cut or timing may differ. Transfer the saved position explicitly, or start from the beginning."
                             else if (entry.completed) "You finished this video."
                             else "Continue from ${entry.positionMs / 60_000}:${(entry.positionMs / 1000 % 60).toString().padStart(2, '0')}?",
                             color = Color.White,
                         )
                         val initialFocus = remember { FocusRequester() }
                         if (!entry.completed) RemoteButton(
-                            if (changedSource) "Transfer saved position" else "Continue",
+                            if (changedSource || automatic) "Transfer saved position" else "Continue",
                             Modifier.focusRequester(initialFocus),
                         ) { model.confirmResume(false) }
                         RemoteButton("Start from beginning",
@@ -938,14 +1102,28 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
         AppPage.PLAYER -> Unit
     }
     fun returnToCatalog() {
-        model.stop()
-        model.navigate(AppPage.CATALOG)
+        if (screen.automaticStatus != null) model.chooseAutomaticSourceManually()
+        else {
+            model.stop()
+            model.navigate(AppPage.CATALOG)
+        }
     }
     BackHandler(onBack = ::returnToCatalog)
     val player = screen.player
     if (player != null) {
-        VideoSurface(player, screen.title, torrent, screen.error, screen.subtitleMessage,
-            screen.episodeSelection != null, onPlayerViewChanged)
+        Box(Modifier.fillMaxSize()) {
+            VideoSurface(player, screen.title, torrent, screen.error, screen.subtitleMessage,
+                screen.episodeSelection != null, screen.automaticStatus != null, onPlayerViewChanged)
+            screen.automaticStatus?.let { status ->
+                AutomaticStartupOverlay(status, torrent, model::chooseAutomaticSourceManually)
+            }
+        }
+        return
+    }
+    screen.automaticStatus?.let { status ->
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            AutomaticStartupOverlay(status, torrent, model::chooseAutomaticSourceManually)
+        }
         return
     }
     val backFocus = remember { FocusRequester() }
@@ -1029,6 +1207,25 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
 }
 
 @Composable
+private fun AutomaticStartupOverlay(status: String, torrent: TorrentState, onManual: () -> Unit) {
+    val focus = remember { FocusRequester() }
+    Column(
+        Modifier.fillMaxWidth().background(Color(0xEE192535)).padding(28.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(status, color = Color.White, fontSize = 22.sp)
+        Text("Automatic selection stops at the first video frame · Up to 4 sources / 120 seconds",
+            color = Color(0xFFB8D8FF), fontSize = 16.sp)
+        Text("${torrent.message}\n${transferLabel(torrent)}", color = Color.White, fontSize = 15.sp)
+        RemoteButton("Choose manually / Cancel", Modifier.focusRequester(focus), onClick = onManual)
+    }
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        focus.requestFocus()
+    }
+}
+
+@Composable
 private fun RemoteButton(
     label: String,
     modifier: Modifier = Modifier,
@@ -1059,6 +1256,7 @@ private fun VideoSurface(
     subtitleError: String?,
     subtitleMessage: String?,
     nextEpisodeAvailable: Boolean,
+    automaticPreparing: Boolean,
     onPlayerViewChanged: (PlayerView?) -> Unit,
 ) {
     var controlsVisible by remember(player) { mutableStateOf(true) }
@@ -1086,8 +1284,8 @@ private fun VideoSurface(
                 PlayerView(context).apply {
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     this.player = player
-                    useController = true
-                    controllerAutoShow = true
+                    useController = !automaticPreparing
+                    controllerAutoShow = !automaticPreparing
                     controllerShowTimeoutMs = 5_000
                     setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
                         controlsVisible = visibility == View.VISIBLE
@@ -1102,11 +1300,15 @@ private fun VideoSurface(
                     isFocusable = true
                     descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
                     onPlayerViewChanged(this)
-                    post { requestFocus(); showController() }
+                    if (!automaticPreparing) post { requestFocus(); showController() }
                 }
             },
             update = { view ->
                 view.player = player
+                val wasPreparing = !view.useController
+                view.useController = !automaticPreparing
+                view.controllerAutoShow = !automaticPreparing
+                if (wasPreparing && !automaticPreparing) view.post { view.requestFocus(); view.showController() }
                 view.setShowNextButton(nextEpisodeAvailable)
                 view.findViewById<View>(androidx.media3.ui.R.id.exo_next).apply {
                     isEnabled = nextEpisodeAvailable

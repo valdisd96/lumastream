@@ -47,6 +47,16 @@ Playback errors distinguish unsupported formats, decoder limits, decoder startup
 
 Compatibility verification on WK03K: debug build, all 93 unit tests (including 15 compatibility regressions), and lint passed. An isolated temporary debug application used real device decoder capabilities with a synthetic `H264 1920x2160 3D` source card; screenshots confirmed readable stereoscopic and decoder-limit warnings with Play still visible. An injected Media3 capability error exercised the production error formatter/screen, and a separate IO error retained its underlying cause without decoder advice. This checks warnings and error presentation, not playback of an incompatible video. The installed signed v0.2.0 and its data were not replaced; temporary verification code/apps were removed.
 
+**Automatic source selection:** choose **Watch automatically…** above the source cards, then explicitly choose a quality/provider-language group. Unknown labels remain a separate group; the picker never silently lowers quality or changes the reported language set. Language labels are not verified audio tracks. Sources with compatibility warnings remain manually selectable but are excluded from automatic selection. Within the chosen group, positive reported seed counts rank first (descending), unknown counts next, zero last; positive reported size breaks ties only and is not treated as an episode bitrate. Duplicate hash/file selections are combined and at most four candidates are attempted.
+
+Automatic startup uses one native session at a time and the real Media3 playback path, not a metadata-only availability probe. It allows up to 15 seconds for metadata and file identification, 35 seconds for the entire attempt, and 120 seconds overall, including teardown between attempts. Mandatory native cleanup can finish after the deadline; no new attempt starts once the overall budget expires. Errors or missing first frames advance to the next candidate only before the first rendered frame. At that frame, the source is committed and automatic switching stops. This improves source selection, not the bandwidth of an unhealthy swarm, and does not guarantee sustained playback speed.
+
+The preparation overlay remains visible over an attached player surface and offers **Choose manually / Cancel**; Back also cancels and returns to sources. Backgrounding cancels startup through normal session shutdown. Every source replacement awaits native teardown; late callbacks from released players cannot affect the current attempt. Existing history requires explicit transfer of the saved position to candidate releases or restarting from the beginning, because their timing may differ. Exhausted attempts retain an actionable error and manual source recovery. Manual playback keeps its existing timeouts.
+
+Automatic-selection verification on WK03K used a separately identified debug application, leaving the installed signed release/settings/history untouched. The real catalog → Sintel → automatic 720p group → explicit restart flow rendered a first frame in 5.724 seconds with 3,342,336 of 143,100,616 bytes downloaded; video was visible and playback advanced. A throwaway on-device scenario first tried an unreachable hash, timed it out, then rendered public Sintel at 23.008 seconds overall (7.014 seconds for the second attempt), before full download. These are individual startup observations, not an improvement benchmark against the previous release. Download lookahead, connection limits and cache eviction were not changed. Diagnostic `LumaPlayer` events include `auto_start`, `auto_metadata`, `auto_first_frame` and `auto_outcome` with monotonic startup timings.
+
+The same device runner cancelled an unreachable first candidate with Back and confirmed return to catalog, no player, completed cleanup and no late fallback after waiting beyond the metadata deadline. Debug build, lint and all 109 JVM tests passed, including 16 new ranking/startup regressions. The temporary runner and isolated application were removed after verification. No new audible-sound or sustained-throughput claim is made.
+
 For catalog sources without provider-supplied trackers, magnets include `udp://tracker.opentrackr.org:1337/announce` and `udp://open.demonii.com:1337/announce` alongside normal DHT discovery. Explicit provider tracker lists are preserved instead of supplemented. These public trackers receive the torrent hash and network IP; they are peer-discovery services, not playback servers. Externally supplied magnets and private torrent documents are not modified. The validated hash uses the conventional readable `xt=urn:btih:` form; percent-encoded colons were also verified to parse correctly in libtorrent.
 
 Artwork uses bounded sizes and a shared 16 MiB memory / 64 MiB disk cache. Text remains available when images fail. Settings include the official TMDB logo and required non-endorsement attribution. Review [TMDB usage requirements](https://developer.themoviedb.org/docs/faq) before distribution; commercial use requires separate agreement.
@@ -105,16 +115,16 @@ With `JAVA_HOME` and `ANDROID_HOME` configured as above:
 ./gradlew assembleRelease testReleaseUnitTest lintRelease
 TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 SIGNING="$HOME/.config/lumastream/signing"
-OUT=".local/release-v0.2.1"
+OUT=".local/release-v0.3.0"
 mkdir -p "$OUT"
 "$TOOLS/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$OUT/aligned.apk"
 "$TOOLS/apksigner" sign \
   --ks "$SIGNING/release.p12" --ks-key-alias lumastream \
   --ks-pass "file:$SIGNING/store-password" \
-  --out "$OUT/lumastream-0.2.1-armeabi-v7a.apk" "$OUT/aligned.apk"
-"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.2.1-armeabi-v7a.apk"
-"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.2.1-armeabi-v7a.apk"
-(cd "$OUT" && shasum -a 256 lumastream-0.2.1-armeabi-v7a.apk > SHA256SUMS)
+  --out "$OUT/lumastream-0.3.0-armeabi-v7a.apk" "$OUT/aligned.apk"
+"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.3.0-armeabi-v7a.apk"
+"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.3.0-armeabi-v7a.apk"
+(cd "$OUT" && shasum -a 256 lumastream-0.3.0-armeabi-v7a.apk > SHA256SUMS)
 ```
 
 Release certificate SHA-256: `c113d8eb54f1eb4cdfe327612236e7dbd7cedce27ab9235a4f4938ad01e35f70`.
