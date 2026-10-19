@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-10-19 (pre-release)
 
+- Prepared an ARMv7 release with version code 6 for same-certificate in-place updates from earlier signed previews.
 - Added Home discovery with TMDB popular/top-rated movie and series collections, media-specific localized genres, bounded pagination and explicit separation from source availability.
 - Added a persistent, source-independent Watch later list with detail-screen add/remove actions, a 100-title limit, atomic storage and visible load/save failures.
 - Added exact movie/episode history removal and watched/unwatched actions; unwatched resets the saved position while other entries and recency order remain unchanged. History now exposes older episodes individually.
