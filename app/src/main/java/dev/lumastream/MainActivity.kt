@@ -83,6 +83,8 @@ import android.app.AlertDialog
 import androidx.media3.common.C
 import dev.lumastream.history.WatchEntry
 import dev.lumastream.history.WatchHistoryStore
+import dev.lumastream.history.removeHistoryEntry
+import dev.lumastream.history.setHistoryCompleted
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -518,6 +520,23 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
         historyWrites.trySend(entries)
     }
 
+    fun removeHistory(entry: WatchEntry) {
+        editHistory { removeHistoryEntry(it, entry.key) }
+    }
+
+    fun setHistoryCompleted(entry: WatchEntry, completed: Boolean) {
+        editHistory { setHistoryCompleted(it, entry.key, completed) }
+    }
+
+    private fun editHistory(transform: (List<WatchEntry>) -> List<WatchEntry>) {
+        // Catalog actions must not race initial loading or an active player's progress writes.
+        if (!historyWritable || screen.value.page != AppPage.CATALOG || screen.value.player != null) return
+        val entries = transform(screen.value.history)
+        if (entries == screen.value.history) return
+        mutableScreen.update { it.copy(history = entries) }
+        historyWrites.trySend(entries)
+    }
+
     fun requestCatalog(selection: CatalogSelection) = requestSources(listOf(selection), automatic = false)
 
     fun requestAutomaticSources(selections: List<CatalogSelection>) {
@@ -620,7 +639,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                     historyStore.save(entries)
                     mutableScreen.update { it.copy(historyError = null) }
                 } catch (_: Exception) {
-                    mutableScreen.update { it.copy(historyError = "Unable to save watch history. Your latest position may not survive closing the app.") }
+                    mutableScreen.update { it.copy(historyError = "Unable to save watch history. Your latest changes may not survive closing the app.") }
                 }
             }
         }
@@ -1040,6 +1059,8 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                 history = screen.history,
                 historyError = screen.historyError,
                 onResume = model::resume,
+                onRemoveHistory = model::removeHistory,
+                onSetHistoryCompleted = model::setHistoryCompleted,
                 recoverySelection = screen.recoveryEntry?.selection?.takeIf { screen.recoveryRequested },
                 onRecoveryConsumed = model::consumeRecoveryRequest,
                 nextEpisodeSelection = screen.nextEpisodeRequest,
