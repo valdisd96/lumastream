@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — 2026-10-19 (pre-release)
+
+- Bumped the application to version code 4 for an in-place, same-certificate upgrade from 0.2.1.
+- Added explicit quality/language-group automatic source selection with compatibility filtering, bounded metadata-based ranking and preserved manual source cards.
+- Try up to four sources sequentially through real torrent/Media3 preparation, with 15-second metadata, 35-second attempt and 120-second overall startup budgets; commit at the first rendered frame without switching releases during playback.
+- Added visible startup progress, cancel/manual recovery, explicit history-position transfer and serialized teardown with stale-player callback protection.
+- Verified real catalog-selected Sintel startup and unreachable-source fallback on WK03K in an isolated app; existing torrent download-window and cache limits remain unchanged.
+
 ## 0.2.1 — 2026-10-18 (pre-release)
 
 - Added advisory source-card warnings for stereoscopic labels, unavailable advertised decoders and dimensions beyond device decoder capabilities; ambiguous provider metadata remains unknown and sources stay selectable.

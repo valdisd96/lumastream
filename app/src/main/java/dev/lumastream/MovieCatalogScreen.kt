@@ -85,6 +85,7 @@ import dev.lumastream.catalog.SourcePage
 import dev.lumastream.catalog.StremioSources
 import dev.lumastream.catalog.TmdbCatalog
 import dev.lumastream.catalog.findNextEpisode
+import dev.lumastream.catalog.rankAutomaticSources
 import dev.lumastream.history.WatchEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -361,6 +362,7 @@ fun MovieCatalogScreen(
     onArchive: () -> Unit,
     onBack: () -> Unit,
     onOpenSource: (CatalogSelection) -> Unit,
+    onAutoSources: (List<CatalogSelection>) -> Unit,
     recoverySelection: CatalogSelection?,
     onRecoveryConsumed: () -> Unit,
     nextEpisodeSelection: CatalogSelection?,
@@ -722,7 +724,13 @@ fun MovieCatalogScreen(
                     CatalogButton("Refresh episodes", onClick = model::retry)
                 }
             }
-            CatalogRoute.SOURCES -> CatalogSourcesContent(state, model::retry) { source ->
+            CatalogRoute.SOURCES -> CatalogSourcesContent(state, model::retry, automatic = { sources ->
+                val selections = sources.mapNotNull { model.selection(it, configuration) }
+                if (selections.size == sources.size && selections.isNotEmpty()) {
+                    dismissInput()
+                    onAutoSources(selections)
+                }
+            }) { source ->
                 model.selection(source, configuration)?.let { selection ->
                     dismissInput()
                     onOpenSource(selection)
@@ -933,11 +941,67 @@ private fun CatalogEpisodesContent(state: MovieCatalogState, retry: () -> Unit, 
 }
 
 @Composable
-private fun CatalogSourcesContent(state: MovieCatalogState, retry: () -> Unit, select: (CatalogSource) -> Unit) {
+private fun CatalogSourcesContent(
+    state: MovieCatalogState,
+    retry: () -> Unit,
+    automatic: (List<CatalogSource>) -> Unit,
+    select: (CatalogSource) -> Unit,
+) {
     val title = state.details?.title ?: return
     val episode = state.episode
     val context = LocalContext.current
     val compatibility = remember(context) { SourceCompatibility(context) }
+    var choosingAutomatic by remember(state.details, state.episode, state.sources) { mutableStateOf(false) }
+    val sources = state.sources?.sources.orEmpty()
+    val automaticGroups = remember(sources, compatibility) {
+        sources.groupBy { source ->
+            source.quality?.trim()?.lowercase(Locale.ROOT).orEmpty() to
+                source.languages.map { it.trim().lowercase(Locale.ROOT) }.filter { it.isNotEmpty() }.distinct().sorted()
+        }.mapNotNull { (cohort, entries) ->
+            val ranked = rankAutomaticSources(entries, entries.first().quality, entries.first().languages) {
+                compatibility.warnings(it).isEmpty()
+            }
+            if (ranked.isEmpty()) null else {
+                val label = "${cohort.first.ifBlank { "Unknown quality" }} · " +
+                    cohort.second.joinToString(", ").ifBlank { "Unknown languages" }
+                label to ranked
+            }
+        }
+    }
+    if (choosingAutomatic) {
+        val initialFocus = remember { FocusRequester() }
+        Dialog(onDismissRequest = { choosingAutomatic = false }) {
+            LazyColumn(
+                Modifier.fillMaxWidth().heightIn(max = 440.dp)
+                    .background(CatalogBackground, RoundedCornerShape(16.dp)).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item { Text("Watch automatically", color = Color.White, fontSize = 24.sp) }
+                item {
+                    Text("Choose quality and provider language labels. We try up to four sources in this group, one at a time, until video starts. Labels are not verified audio tracks; unknown stays unknown. No automatic switching after playback starts.",
+                        color = CatalogMuted, fontSize = 15.sp)
+                }
+                item {
+                    Text("Up to 2 minutes, plus session cleanup. You can cancel and choose manually at any time. A quick start does not guarantee sustained speed.",
+                        color = CatalogMuted, fontSize = 15.sp)
+                }
+                items(automaticGroups.size) { index ->
+                    val (label, candidates) = automaticGroups[index]
+                    CatalogButton("$label · ${candidates.size} source(s)", Modifier.fillMaxWidth().then(
+                        if (index == 0) Modifier.focusRequester(initialFocus) else Modifier,
+                    )) {
+                        choosingAutomatic = false
+                        automatic(candidates)
+                    }
+                }
+                item { CatalogButton("Cancel", onClick = { choosingAutomatic = false }) }
+            }
+            LaunchedEffect(Unit) {
+                withFrameNanos { }
+                initialFocus.requestFocus()
+            }
+        }
+    }
     // Identity remains outside the scrolling source list, including while requests fail.
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -962,6 +1026,15 @@ private fun CatalogSourcesContent(state: MovieCatalogState, retry: () -> Unit, s
         if (page != null && page.sources.isNotEmpty()) {
             if (page.unsupportedCount > 0) Text("${page.unsupportedCount} unsupported stream(s) omitted.", color = CatalogMuted, fontSize = 13.sp)
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (automaticGroups.isNotEmpty()) {
+                    item {
+                        CatalogButton("Watch automatically…", Modifier.fillMaxWidth()) { choosingAutomatic = true }
+                    }
+                } else {
+                    item {
+                        CatalogReadable("Automatic selection has no candidates without compatibility warnings. You can still choose a source manually.")
+                    }
+                }
                 items(page.sources) { source ->
                     val warnings = remember(source, compatibility) { compatibility.warnings(source) }
                     CatalogTile(Modifier.fillMaxWidth(), onClick = { select(source) }) {
