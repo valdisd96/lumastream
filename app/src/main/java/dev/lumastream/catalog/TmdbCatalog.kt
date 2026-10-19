@@ -25,11 +25,59 @@ class TmdbCatalog(private val token: String, private val language: String) {
             CatalogFilter.SERIES -> "tv"
         }
         val data = request("search/$type", mapOf("query" to text, "page" to page.toString(), "include_adult" to "false"))
-        val results = data.optJSONArray("results") ?: throw IOException("TMDB search metadata is missing.")
+        return parsePage(data, page, when (filter) {
+            CatalogFilter.ALL -> null
+            CatalogFilter.MOVIES -> MediaKind.MOVIE
+            CatalogFilter.SERIES -> MediaKind.SERIES
+        })
+    }
+
+    suspend fun browse(
+        kind: MediaKind,
+        collection: CatalogCollection,
+        page: Int = 1,
+        genreId: Int? = null,
+    ): CatalogPage {
+        require(page in 1..MAX_PAGES) { "Catalog page must be between 1 and $MAX_PAGES." }
+        require(genreId == null || genreId > 0) { "Invalid TMDB genre identifier." }
+        val parameters = mutableMapOf("page" to page.toString(), "include_adult" to "false")
+        val path = if (genreId == null) {
+            "${kind.apiType}/${if (collection == CatalogCollection.POPULAR) "popular" else "top_rated"}"
+        } else {
+            parameters["with_genres"] = genreId.toString()
+            parameters["sort_by"] = if (collection == CatalogCollection.POPULAR) "popularity.desc" else "vote_average.desc"
+            // Avoid ranking a title with only one vote above established titles.
+            if (collection == CatalogCollection.TOP_RATED) parameters["vote_count.gte"] = "200"
+            "discover/${kind.apiType}"
+        }
+        return parsePage(request(path, parameters), page, kind)
+    }
+
+    suspend fun genres(kind: MediaKind): List<CatalogGenre> =
+        parseGenres(request("genre/${kind.apiType}/list"))
+
+    internal fun parseGenres(data: JSONObject): List<CatalogGenre> {
+        val values = data.optJSONArray("genres") ?: throw IOException("TMDB genre metadata is missing.")
+        if (values.length() > 100) throw IOException("TMDB returned too many genres.")
+        return buildList {
+            for (index in 0 until values.length()) {
+                val value = values.optJSONObject(index) ?: throw IOException("TMDB genre metadata is invalid.")
+                val id = value.catalogInteger("id")?.takeIf { it in 1..Int.MAX_VALUE }?.toInt()
+                val name = value.catalogText("name", 256)
+                if (id == null || name.isEmpty()) throw IOException("TMDB genre identity is missing.")
+                add(CatalogGenre(id, name))
+            }
+        }.distinctBy { it.id }
+    }
+
+    internal fun parsePage(data: JSONObject, page: Int, requestedKind: MediaKind?): CatalogPage {
+        require(page in 1..MAX_PAGES) { "Catalog page must be between 1 and $MAX_PAGES." }
+        val results = data.optJSONArray("results") ?: throw IOException("TMDB catalog metadata is missing.")
         val items = buildList {
             for (index in 0 until minOf(results.length(), 100)) {
                 val result = results.optJSONObject(index) ?: continue
-                val kind = when (if (type == "multi") result.catalogText("media_type") else type) {
+                if (result.optBoolean("adult", false)) continue
+                val kind = requestedKind ?: when (result.catalogText("media_type")) {
                     "movie" -> MediaKind.MOVIE
                     "tv" -> MediaKind.SERIES
                     else -> continue
@@ -96,7 +144,7 @@ class TmdbCatalog(private val token: String, private val language: String) {
     }
 
     private fun title(data: JSONObject, kind: MediaKind): CatalogTitle {
-        val id = data.optInt("id", -1)
+        val id = data.catalogInteger("id")?.takeIf { it in 1..Int.MAX_VALUE }?.toInt() ?: -1
         val movie = kind == MediaKind.MOVIE
         val name = data.catalogText(if (movie) "title" else "name", 512)
         val original = data.catalogText(if (movie) "original_title" else "original_name", 512)

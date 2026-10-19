@@ -82,6 +82,31 @@ class WatchHistoryTest {
         assertEquals(listOf(newest) + entries.drop(5).dropLast(1).reversed(), loaded)
     }
 
+    @Test fun manualCompletionAndResetAffectOnlyTheChosenEpisodeAndPersist() = runBlocking {
+        val other = entry.copy(selection = entry.selection.copy(episode = episode.copy(number = 3)),
+            updatedAtMs = entry.updatedAtMs - 1)
+        val watched = setHistoryCompleted(listOf(entry, other), entry.key, true)
+        WatchHistoryStore(file).save(watched)
+        val restored = WatchHistoryStore(file).load()
+        assertEquals(listOf(entry.copy(completed = true), other), restored)
+        WatchHistoryStore(file).save(setHistoryCompleted(restored, entry.key, false))
+        assertEquals(listOf(entry.copy(positionMs = 0, completed = false), other),
+            WatchHistoryStore(file).load())
+    }
+
+    @Test fun removalKeepsOtherEpisodesAndSameIdMovieAndPersistsEmptyHistory() = runBlocking {
+        val other = entry.copy(selection = entry.selection.copy(episode = episode.copy(number = 3)),
+            updatedAtMs = entry.updatedAtMs - 1)
+        val movie = entry.copy(selection = entry.selection.copy(
+            details = details.copy(title = title.copy(kind = MediaKind.MOVIE)), episode = null),
+            updatedAtMs = entry.updatedAtMs - 2)
+        WatchHistoryStore(file).save(removeHistoryEntry(listOf(entry, other, movie), entry.key))
+        assertEquals(listOf(other, movie), WatchHistoryStore(file).load())
+        WatchHistoryStore(file).save(removeHistoryEntry(removeHistoryEntry(
+            WatchHistoryStore(file).load(), other.key), movie.key))
+        assertEquals(emptyList<WatchEntry>(), WatchHistoryStore(file).load())
+    }
+
     @Test fun corruptHistoryReportsErrorWithoutClearingFile() {
         val corrupt = "{\"version\":1,\"entries\":[{"
         file.writeText(corrupt)

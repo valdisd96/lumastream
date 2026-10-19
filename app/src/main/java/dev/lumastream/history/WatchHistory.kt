@@ -33,6 +33,17 @@ data class WatchEntry(
     val key: String get() = selection.episode?.let { "$titleKey:${it.season}:${it.number}" } ?: titleKey
 }
 
+internal fun removeHistoryEntry(entries: List<WatchEntry>, key: String): List<WatchEntry> =
+    entries.filterNot { it.key == key }
+
+internal fun setHistoryCompleted(entries: List<WatchEntry>, key: String, completed: Boolean): List<WatchEntry> =
+    entries.map { entry ->
+        if (entry.key == key) entry.copy(
+            completed = completed,
+            positionMs = if (completed) entry.positionMs else 0,
+        ) else entry
+    }
+
 class WatchHistoryStore internal constructor(private val file: File) {
     constructor(context: Context) : this(File(context.filesDir, "watch-history.json"))
 

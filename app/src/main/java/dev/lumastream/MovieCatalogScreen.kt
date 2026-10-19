@@ -1,5 +1,6 @@
 package dev.lumastream
 
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -73,6 +75,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import dev.lumastream.catalog.CatalogCollection
+import dev.lumastream.catalog.CatalogGenre
 import dev.lumastream.catalog.CatalogConfiguration
 import dev.lumastream.catalog.CatalogDetails
 import dev.lumastream.catalog.CatalogEpisode
@@ -89,6 +93,7 @@ import dev.lumastream.catalog.TmdbCatalog
 import dev.lumastream.catalog.findNextEpisode
 import dev.lumastream.catalog.rankAutomaticSources
 import dev.lumastream.history.WatchEntry
+import dev.lumastream.history.WatchLaterStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
@@ -96,11 +101,36 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.Locale
 
 private enum class CatalogRoute { RESULTS, DETAILS, EPISODES, SOURCES, NEXT_EPISODE }
+private enum class CatalogSection { HOME, SEARCH, DISCOVERY, WATCH_LATER, HISTORY }
+
+private fun CatalogSection.label(): String = when (this) {
+    CatalogSection.HOME -> "Home"
+    CatalogSection.SEARCH -> "Search"
+    CatalogSection.DISCOVERY -> "Discover"
+    CatalogSection.WATCH_LATER -> "Watch later"
+    CatalogSection.HISTORY -> "History"
+}
+
+private data class WatchLaterState(
+    val titles: List<CatalogTitle> = emptyList(),
+    val loaded: Boolean = false,
+    val busy: Boolean = true,
+    val error: String? = null,
+)
+
+private data class CatalogViewport(val index: Int = 0, val offset: Int = 0, val focused: String? = null)
 
 private data class MovieCatalogState(
+    val section: CatalogSection = CatalogSection.HOME,
+    val browseKind: MediaKind = MediaKind.MOVIE,
+    val collection: CatalogCollection = CatalogCollection.POPULAR,
+    val genres: List<CatalogGenre> = emptyList(),
+    val genreId: Int? = null,
     val query: String = "",
     val filter: CatalogFilter = CatalogFilter.ALL,
     val route: CatalogRoute = CatalogRoute.RESULTS,
@@ -123,7 +153,7 @@ private data class MovieCatalogState(
     val focusEpoch: Long = 0,
 )
 
-private class MovieCatalogViewModel : ViewModel() {
+private class MovieCatalogViewModel(context: Context) : ViewModel() {
     private val mutableState = MutableStateFlow(MovieCatalogState())
     val state = mutableState.asStateFlow()
     private var configuration: CatalogConfiguration? = null
@@ -132,6 +162,107 @@ private class MovieCatalogViewModel : ViewModel() {
     private var active = false
     private var generation = 0L
     private var request: Job? = null
+    private val watchLaterStore = WatchLaterStore(context.applicationContext)
+    private val watchLaterLock = Mutex()
+    private val mutableWatchLater = MutableStateFlow(WatchLaterState())
+    val watchLater = mutableWatchLater.asStateFlow()
+    val viewports = mutableMapOf<String, CatalogViewport>()
+
+    fun saveViewport(key: String, viewport: CatalogViewport) {
+        viewports.remove(key)
+        viewports[key] = viewport
+        if (viewports.size > 32) viewports.remove(viewports.keys.first())
+    }
+
+    init { loadWatchLater() }
+
+    fun loadWatchLater() {
+        if (watchLater.value.loaded) return
+        viewModelScope.launch {
+            watchLaterLock.withLock {
+                if (watchLater.value.loaded) return@withLock
+                mutableWatchLater.update { it.copy(busy = true, error = null) }
+                try {
+                    mutableWatchLater.value = WatchLaterState(watchLaterStore.load(), loaded = true, busy = false)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    mutableWatchLater.update {
+                        it.copy(busy = false, error = "Watch later could not be read. Saved titles have not been changed. Retry loading before making changes.")
+                    }
+                }
+            }
+        }
+    }
+
+    fun toggleWatchLater(title: CatalogTitle) {
+        if (!watchLater.value.loaded || watchLater.value.busy) return
+        mutableWatchLater.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            watchLaterLock.withLock {
+                val current = watchLater.value.titles
+                val exists = current.any { it.identity() == title.identity() }
+                if (!exists && current.size >= 100) {
+                    mutableWatchLater.update {
+                        it.copy(busy = false, error = "Watch later is full (100 titles). Remove a title before adding another.")
+                    }
+                    return@withLock
+                }
+                val next = if (exists) current.filterNot { it.identity() == title.identity() } else listOf(title) + current
+                try {
+                    watchLaterStore.save(next)
+                    mutableWatchLater.value = WatchLaterState(next, loaded = true, busy = false)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    mutableWatchLater.update {
+                        it.copy(busy = false, error = "Watch later could not be saved. Previous titles are unchanged. Try the action again.")
+                    }
+                }
+            }
+        }
+    }
+
+    fun openSection(section: CatalogSection) {
+        cancel()
+        mutableState.update {
+            it.copy(section = section, route = CatalogRoute.RESULTS, titles = emptyList(), selected = null,
+                details = null, searched = false, page = 1, hasMore = false, error = null,
+                focusEpoch = it.focusEpoch + 1)
+        }
+        if (section == CatalogSection.DISCOVERY) browse()
+    }
+
+    fun browse(
+        kind: MediaKind = state.value.browseKind,
+        collection: CatalogCollection = state.value.collection,
+        genreId: Int? = state.value.genreId,
+        page: Int = 1,
+    ) {
+        val client = catalog ?: return
+        if (!active || page !in 1..500) return
+        cancel()
+        val changedKind = kind != state.value.browseKind
+        mutableState.update {
+            it.copy(section = CatalogSection.DISCOVERY, route = CatalogRoute.RESULTS,
+                browseKind = kind, collection = collection, genreId = if (changedKind) null else genreId,
+                genres = if (changedKind) emptyList() else it.genres, page = page,
+                titles = emptyList(), selected = null, searched = false, hasMore = false,
+                focusEpoch = it.focusEpoch + 1)
+        }
+        val current = state.value
+        load {
+            val genres = if (current.genres.isEmpty()) client.genres(kind) else current.genres
+            val result = client.browse(kind, collection, page, current.genreId)
+            current.copy(genres = genres, titles = result.items, page = result.page,
+                hasMore = result.hasMore && result.page < 500, searched = true,
+                focusEpoch = current.focusEpoch + 1)
+        }
+    }
+
+    fun page(number: Int) {
+        if (state.value.section == CatalogSection.DISCOVERY) browse(page = number) else search(number)
+    }
 
     fun configure(value: CatalogConfiguration) {
         if (configuration == value) return
@@ -139,6 +270,7 @@ private class MovieCatalogViewModel : ViewModel() {
         configuration = value
         catalog = value.token.takeIf { it.isNotBlank() }?.let { TmdbCatalog(it, value.catalogLanguage) }
         provider = MultiSourceProviders(value)
+        viewports.clear()
         mutableState.value = MovieCatalogState(focusEpoch = state.value.focusEpoch + 1)
     }
 
@@ -192,13 +324,19 @@ private class MovieCatalogViewModel : ViewModel() {
     fun setQuery(query: String) {
         if (query == state.value.query) return
         cancel()
-        mutableState.value = MovieCatalogState(query = query, filter = state.value.filter, focusEpoch = state.value.focusEpoch)
+        mutableState.update {
+            it.copy(section = CatalogSection.SEARCH, query = query, route = CatalogRoute.RESULTS,
+                titles = emptyList(), searched = false, selected = null, error = null)
+        }
     }
 
     fun setFilter(filter: CatalogFilter) {
         if (state.value.filter == filter) return
         cancel()
-        mutableState.value = MovieCatalogState(query = state.value.query, filter = filter, focusEpoch = state.value.focusEpoch)
+        mutableState.update {
+            it.copy(section = CatalogSection.SEARCH, filter = filter, route = CatalogRoute.RESULTS,
+                titles = emptyList(), searched = false, selected = null, error = null)
+        }
         if (state.value.query.isNotBlank()) search()
     }
 
@@ -207,7 +345,7 @@ private class MovieCatalogViewModel : ViewModel() {
         if (!active || state.value.query.isBlank() || page < 1) return
         cancel()
         mutableState.update {
-            it.copy(route = CatalogRoute.RESULTS, page = page, titles = emptyList(), hasMore = false,
+            it.copy(section = CatalogSection.SEARCH, route = CatalogRoute.RESULTS, page = page, titles = emptyList(), hasMore = false,
                 searched = false, selected = null, details = null, season = null, episodes = emptyList(),
                 episodesLoaded = false, episode = null, sources = null, historySources = false)
         }
@@ -230,7 +368,10 @@ private class MovieCatalogViewModel : ViewModel() {
     }
 
     private fun loadDetails() {
-        val client = catalog ?: return
+        val client = catalog ?: run {
+            mutableState.update { it.copy(error = "Connect TMDB in Settings to load current details and find sources.") }
+            return
+        }
         val current = state.value
         val title = current.selected ?: return
         load { current.copy(details = client.details(title)) }
@@ -345,7 +486,7 @@ private class MovieCatalogViewModel : ViewModel() {
 
     fun retry() {
         when (state.value.route) {
-            CatalogRoute.RESULTS -> search(state.value.page)
+            CatalogRoute.RESULTS -> page(state.value.page)
             CatalogRoute.DETAILS -> loadDetails()
             CatalogRoute.EPISODES -> loadEpisodes()
             CatalogRoute.SOURCES -> loadSources()
@@ -357,7 +498,11 @@ private class MovieCatalogViewModel : ViewModel() {
         val current = state.value
         cancel()
         val route = when (current.route) {
-            CatalogRoute.RESULTS -> return false
+            CatalogRoute.RESULTS -> {
+                if (current.section == CatalogSection.HOME) return false
+                openSection(CatalogSection.HOME)
+                return true
+            }
             CatalogRoute.DETAILS -> CatalogRoute.RESULTS
             CatalogRoute.EPISODES -> CatalogRoute.DETAILS
             CatalogRoute.NEXT_EPISODE -> CatalogRoute.DETAILS
@@ -394,6 +539,8 @@ fun MovieCatalogScreen(
     history: List<WatchEntry>,
     historyError: String?,
     onResume: (WatchEntry, Boolean) -> Unit,
+    onRemoveHistory: (WatchEntry) -> Unit,
+    onSetHistoryCompleted: (WatchEntry, Boolean) -> Unit,
     onConfigure: () -> Unit,
     onArchive: () -> Unit,
     onBack: () -> Unit,
@@ -404,13 +551,15 @@ fun MovieCatalogScreen(
     nextEpisodeSelection: CatalogSelection?,
     onNextEpisodeConsumed: () -> Unit,
 ) {
+    val context = LocalContext.current.applicationContext
     val model: MovieCatalogViewModel = viewModel(factory = remember {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T = MovieCatalogViewModel() as T
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = MovieCatalogViewModel(context) as T
         }
     })
     val state by model.state.collectAsStateWithLifecycle()
+    val watchLater by model.watchLater.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -419,17 +568,31 @@ fun MovieCatalogScreen(
     val backFocus = remember { FocusRequester() }
     val searchFocus = remember { FocusRequester() }
     val queryFocus = remember { FocusRequester() }
-    val resultsScroll = rememberLazyGridState()
+    val searchScroll = rememberLazyGridState()
+    val discoveryScroll = rememberLazyGridState()
+    val watchLaterScroll = rememberLazyGridState()
+    val historyScroll = rememberLazyListState()
+    val resultsScroll = when (state.section) {
+        CatalogSection.WATCH_LATER -> watchLaterScroll
+        CatalogSection.DISCOVERY -> discoveryScroll
+        else -> searchScroll
+    }
+    val visibleTitles = if (state.section == CatalogSection.WATCH_LATER) watchLater.titles else state.titles
+    val listKey = when (state.section) {
+        CatalogSection.SEARCH -> "search:${state.query}:${state.filter}:${state.page}"
+        CatalogSection.DISCOVERY -> "browse:${state.browseKind}:${state.collection}:${state.genreId}:${state.page}"
+        else -> state.section.name
+    }
     var editingQuery by remember { mutableStateOf(false) }
     var keyboardWasVisible by remember { mutableStateOf(false) }
     var homeFocusPending by remember { mutableStateOf(true) }
     var pendingResultFocus by remember { mutableStateOf<String?>(null) }
     var pendingHistoryFocus by remember { mutableStateOf<String?>(null) }
     val latestHistory = remember(history) {
-        history.sortedByDescending { it.updatedAtMs }.distinctBy { it.titleKey }
+        history.sortedByDescending { it.updatedAtMs }.distinctBy { it.key }
     }
     var resumeEntry by remember { mutableStateOf<WatchEntry?>(null) }
-    var historyFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    var choosingGenre by remember { mutableStateOf(false) }
 
     DisposableEffect(model, lifecycle, configuration) {
         model.configure(configuration)
@@ -496,23 +659,48 @@ fun MovieCatalogScreen(
         }
     }
 
-    LaunchedEffect(state.route, state.focusEpoch) {
+    LaunchedEffect(state.route, state.focusEpoch, visibleTitles, latestHistory) {
+        if (editingQuery) return@LaunchedEffect
         dismissInput()
         pendingResultFocus = null
-        pendingHistoryFocus = if (state.route == CatalogRoute.RESULTS && !state.searched) {
-            latestHistory.firstOrNull {
-                it.selection.details.title.id == state.selected?.id &&
-                    it.selection.details.title.kind == state.selected?.kind
-            }?.titleKey
-        } else null
-        homeFocusPending = state.route == CatalogRoute.RESULTS && state.titles.isEmpty() &&
-            pendingHistoryFocus == null
-        if (state.route == CatalogRoute.RESULTS && state.titles.isNotEmpty()) {
-            val index = state.titles.indexOfFirst { it.id == state.selected?.id && it.kind == state.selected?.kind }
-                .coerceAtLeast(0)
-            resultsScroll.scrollToItem(index)
-            pendingResultFocus = state.titles[index].identity()
+        pendingHistoryFocus = null
+        homeFocusPending = state.route == CatalogRoute.RESULTS
+        if (state.route == CatalogRoute.RESULTS) {
+            val saved = model.viewports[listKey]
+            if (visibleTitles.isNotEmpty()) {
+                val index = (saved?.index ?: 0).coerceIn(0, visibleTitles.lastIndex)
+                resultsScroll.scrollToItem(index, saved?.offset ?: 0)
+                pendingResultFocus = saved?.focused?.takeIf { key -> visibleTitles.any { it.identity() == key } }
+                    ?: visibleTitles[index].identity()
+                homeFocusPending = false
+            } else if (state.section == CatalogSection.HISTORY && latestHistory.isNotEmpty()) {
+                val index = (saved?.index ?: 0).coerceIn(0, latestHistory.lastIndex)
+                historyScroll.scrollToItem(index, saved?.offset ?: 0)
+                pendingHistoryFocus = saved?.focused?.takeIf { key -> latestHistory.any { it.key == key } }
+                    ?: latestHistory[index].key
+                homeFocusPending = false
+            }
         }
+        if (pendingResultFocus == null && pendingHistoryFocus == null &&
+            state.route == CatalogRoute.RESULTS && state.section !in listOf(CatalogSection.HOME, CatalogSection.SEARCH)) {
+            withFrameNanos { }
+            searchFocus.requestFocus()
+            homeFocusPending = false
+        }
+    }
+
+    fun rememberHistory(entry: WatchEntry) {
+        model.saveViewport(listKey, CatalogViewport(
+            historyScroll.firstVisibleItemIndex, historyScroll.firstVisibleItemScrollOffset, entry.key,
+        ))
+    }
+
+    fun closeHistoryDialog() {
+        resumeEntry = null
+        val saved = model.viewports[listKey]
+        pendingHistoryFocus = saved?.focused?.takeIf { key -> latestHistory.any { it.key == key } }
+            ?: latestHistory.getOrNull((saved?.index ?: 0).coerceAtMost((latestHistory.size - 1).coerceAtLeast(0)))?.key
+        homeFocusPending = latestHistory.isEmpty()
     }
 
     fun search() {
@@ -524,10 +712,7 @@ fun MovieCatalogScreen(
     resumeEntry?.let { entry ->
         CatalogResumeDialog(
             entry = entry,
-            onDismiss = {
-                resumeEntry = null
-                historyFocus?.requestFocus()
-            },
+            onDismiss = ::closeHistoryDialog,
             onResume = { startOver ->
                 resumeEntry = null
                 leave { onResume(entry, startOver) }
@@ -542,7 +727,45 @@ fun MovieCatalogScreen(
                 dismissInput()
                 model.select(entry.selection.details.title)
             },
+            onRemove = {
+                onRemoveHistory(entry)
+                closeHistoryDialog()
+            },
+            onSetCompleted = {
+                onSetHistoryCompleted(entry, !entry.completed)
+                closeHistoryDialog()
+            },
         )
+    }
+    if (choosingGenre) {
+        Dialog(onDismissRequest = { choosingGenre = false }) {
+            val initial = remember { FocusRequester() }
+            LazyColumn(
+                Modifier.fillMaxWidth().heightIn(max = 400.dp)
+                    .background(CatalogBackground, RoundedCornerShape(16.dp)).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item { Text("Choose genre", color = Color.White, fontSize = 24.sp) }
+                item {
+                    CatalogButton("All genres", Modifier.fillMaxWidth().focusRequester(initial),
+                        selected = state.genreId == null) {
+                        choosingGenre = false
+                        model.browse(genreId = null)
+                    }
+                }
+                items(state.genres, key = { it.id }) { genre ->
+                    CatalogButton(genre.name, Modifier.fillMaxWidth(), selected = state.genreId == genre.id) {
+                        choosingGenre = false
+                        model.browse(genreId = genre.id)
+                    }
+                }
+                item { CatalogButton("Back", Modifier.fillMaxWidth()) { choosingGenre = false } }
+            }
+            LaunchedEffect(Unit) {
+                withFrameNanos { }
+                initial.requestFocus()
+            }
+        }
     }
     Column(
         Modifier.fillMaxSize()
@@ -555,22 +778,22 @@ fun MovieCatalogScreen(
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (state.route != CatalogRoute.RESULTS) {
+            if (state.route != CatalogRoute.RESULTS || state.section != CatalogSection.HOME) {
                 CatalogButton(
                     when (state.route) {
-                        CatalogRoute.RESULTS -> "Back to results"
-                        CatalogRoute.DETAILS -> if (state.searched) "Back to results" else "Back to Home"
+                        CatalogRoute.RESULTS -> "Back to Home"
+                        CatalogRoute.DETAILS -> "Back to ${state.section.label()}"
                         CatalogRoute.EPISODES -> "Back to seasons"
                         CatalogRoute.NEXT_EPISODE -> "Back to seasons"
                         CatalogRoute.SOURCES -> when {
-                            state.historySources -> "Back to Home"
+                            state.historySources -> "Back to ${state.section.label()}"
                             state.episode == null -> "Back to details"
                             else -> "Back to episodes"
                         }
                     },
                     Modifier.focusRequester(backFocus), onClick = ::goBack,
                 )
-                LaunchedEffect(state.route, state.focusEpoch) {
+                if (state.route != CatalogRoute.RESULTS) LaunchedEffect(state.route, state.focusEpoch) {
                     withFrameNanos { }
                     backFocus.requestFocus()
                 }
@@ -579,144 +802,210 @@ fun MovieCatalogScreen(
                 Text("LumaStream", color = Color.White, fontSize = 25.sp)
                 Text("MOVIES & SERIES", color = CatalogAccent, fontSize = 10.sp, letterSpacing = 2.sp)
             }
+            if (state.route == CatalogRoute.RESULTS &&
+                state.section !in listOf(CatalogSection.HOME, CatalogSection.SEARCH)) {
+                CatalogButton("Search", Modifier.focusRequester(searchFocus)) {
+                    model.openSection(CatalogSection.SEARCH)
+                }
+            }
             CatalogButton("Archive") { leave(onArchive) }
             CatalogButton("Settings") { leave(onConfigure) }
         }
         when (state.route) {
             CatalogRoute.RESULTS -> {
-                val welcoming = !state.searched && !state.loading && state.error == null
-                val showHistory = latestHistory.isNotEmpty() && !state.searched &&
-                    !state.loading && state.error == null && !editingQuery
-                val showWelcome = welcoming && !showHistory
-                Column(
-                    Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(Brush.horizontalGradient(listOf(Color(0xFF263B57), Color(0xFF192535))))
-                        .padding(horizontal = 24.dp, vertical = if (showWelcome) 26.dp else 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    if (showWelcome) {
-                        Text("What will you watch?", color = Color.White, fontSize = 32.sp)
-                        Text("Find your next movie or series.", color = CatalogMuted, fontSize = 16.sp)
-                    }
-                    if (editingQuery) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(
-                                value = state.query,
-                                onValueChange = model::setQuery,
-                                modifier = Modifier.weight(1f).focusRequester(queryFocus),
-                                label = { Text("Search movies and series") },
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White,
-                                    cursorColor = CatalogAccent,
-                                    focusedBorderColor = CatalogAccent,
-                                    unfocusedBorderColor = CatalogMuted,
-                                    focusedLabelColor = CatalogAccent,
-                                    unfocusedLabelColor = CatalogMuted,
-                                ),
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(onSearch = { search() }),
-                            )
-                            CatalogButton("Search", enabled = state.query.isNotBlank(), onClick = ::search)
+                if (state.section == CatalogSection.HOME || state.section == CatalogSection.SEARCH) {
+                    Column(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
+                            .background(Brush.horizontalGradient(listOf(Color(0xFF263B57), Color(0xFF192535))))
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        if (state.section == CatalogSection.HOME) {
+                            Text("What will you watch?", color = Color.White, fontSize = 30.sp)
                         }
-                        LaunchedEffect(Unit) {
-                            withFrameNanos { }
-                            queryFocus.requestFocus()
-                            keyboard?.show()
-                        }
-                    } else {
-                        Button(
-                            onClick = {
-                                if (configuration.token.isBlank()) leave(onConfigure) else editingQuery = true
-                            },
-                            modifier = Modifier.fillMaxWidth().height(58.dp).focusRequester(searchFocus),
-                            scale = ButtonDefaults.scale(focusedScale = 1.02f),
-                            colors = ButtonDefaults.colors(
-                                containerColor = Color(0xFF334C6B), contentColor = Color.White,
-                                focusedContainerColor = CatalogAccent, focusedContentColor = Color(0xFF10213B),
-                            ),
-                        ) {
-                            androidx.tv.material3.Text(
-                                if (state.query.isBlank()) "Search movies and series" else "Search: ${state.query}",
-                                fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        LaunchedEffect(homeFocusPending, state.focusEpoch, windowFocused) {
-                            if (windowFocused && homeFocusPending && resumeEntry == null) {
+                        if (editingQuery) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = state.query,
+                                    onValueChange = model::setQuery,
+                                    modifier = Modifier.weight(1f).focusRequester(queryFocus),
+                                    label = { Text("Search movies and series") },
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                                        cursorColor = CatalogAccent, focusedBorderColor = CatalogAccent,
+                                        unfocusedBorderColor = CatalogMuted, focusedLabelColor = CatalogAccent,
+                                        unfocusedLabelColor = CatalogMuted,
+                                    ),
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                    keyboardActions = KeyboardActions(onSearch = { search() }),
+                                )
+                                CatalogButton("Search", enabled = state.query.isNotBlank(), onClick = ::search)
+                            }
+                            LaunchedEffect(Unit) {
                                 withFrameNanos { }
-                                searchFocus.requestFocus()
-                                homeFocusPending = false
+                                queryFocus.requestFocus()
+                                keyboard?.show()
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    if (configuration.token.isBlank()) leave(onConfigure) else editingQuery = true
+                                },
+                                modifier = Modifier.fillMaxWidth().height(54.dp).focusRequester(searchFocus),
+                                scale = ButtonDefaults.scale(focusedScale = 1.02f),
+                                colors = ButtonDefaults.colors(
+                                    containerColor = Color(0xFF334C6B), contentColor = Color.White,
+                                    focusedContainerColor = CatalogAccent, focusedContentColor = Color(0xFF10213B),
+                                ),
+                            ) {
+                                androidx.tv.material3.Text(
+                                    if (state.query.isBlank()) "Search movies and series" else "Search: ${state.query}",
+                                    fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            LaunchedEffect(homeFocusPending, state.focusEpoch, windowFocused) {
+                                if (windowFocused && homeFocusPending && resumeEntry == null) {
+                                    withFrameNanos { }
+                                    searchFocus.requestFocus()
+                                    homeFocusPending = false
+                                }
                             }
                         }
-                    }
-                    if (configuration.token.isBlank()) {
-                        Text("Connect TMDB in Settings to start searching.", color = CatalogMuted, fontSize = 14.sp)
-                    } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Browse", color = CatalogMuted, fontSize = 13.sp)
-                            CatalogFilter.entries.forEach { filter ->
-                                CatalogButton(
-                                    when (filter) {
-                                        CatalogFilter.ALL -> "All"
-                                        CatalogFilter.MOVIES -> "Movies"
-                                        CatalogFilter.SERIES -> "Series"
-                                    },
-                                    selected = state.filter == filter,
-                                ) {
-                                    dismissInput()
-                                    homeFocusPending = true
-                                    model.setFilter(filter)
+                        if (configuration.token.isBlank()) {
+                            Text("Connect TMDB in Settings to search and discover.", color = CatalogMuted, fontSize = 14.sp)
+                        } else if (state.section == CatalogSection.SEARCH) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Search", color = CatalogMuted, fontSize = 13.sp)
+                                CatalogFilter.entries.forEach { filter ->
+                                    CatalogButton(
+                                        when (filter) {
+                                            CatalogFilter.ALL -> "All"
+                                            CatalogFilter.MOVIES -> "Movies"
+                                            CatalogFilter.SERIES -> "Series"
+                                        }, selected = state.filter == filter,
+                                    ) {
+                                        dismissInput()
+                                        model.setFilter(filter)
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                historyError?.let {
-                    Text("Watch history: $it", color = Color(0xFFFFB4AB), fontSize = 14.sp,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-                CatalogStatus(state) {
-                    dismissInput()
-                    homeFocusPending = true
-                    model.retry()
-                }
-                if (!state.loading && state.error == null && state.searched && state.titles.isEmpty()) {
-                    Text("No matching titles. Try another search or filter.", color = CatalogMuted)
-                }
-                if (state.titles.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Results · Page ${state.page}", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                        Text("TMDB", color = CatalogMuted, fontSize = 12.sp)
-                        if (state.page > 1) CatalogButton("Previous page") {
-                            homeFocusPending = true
-                            model.search(state.page - 1)
+                if (state.section == CatalogSection.HOME) {
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        item {
+                            CatalogButton("Discover · Popular, top rated & genres", Modifier.fillMaxWidth()) {
+                                if (configuration.token.isBlank()) leave(onConfigure)
+                                else model.openSection(CatalogSection.DISCOVERY)
+                            }
                         }
-                        if (state.hasMore) CatalogButton("Next page") {
-                            homeFocusPending = true
-                            model.search(state.page + 1)
+                        item {
+                            CatalogButton("Watch later · ${watchLater.titles.size}", Modifier.fillMaxWidth()) {
+                                model.openSection(CatalogSection.WATCH_LATER)
+                            }
+                        }
+                        item {
+                            CatalogButton("History · Continue watching & watched", Modifier.fillMaxWidth()) {
+                                model.openSection(CatalogSection.HISTORY)
+                            }
+                        }
+                        item {
+                            Text("Movie and series metadata by TMDB. Availability and rights are separate.",
+                                color = CatalogMuted, fontSize = 13.sp)
                         }
                     }
-                    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                }
+                if (state.section == CatalogSection.DISCOVERY) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        CatalogButton("Movies", selected = state.browseKind == MediaKind.MOVIE) {
+                            model.browse(kind = MediaKind.MOVIE)
+                        }
+                        CatalogButton("Series", selected = state.browseKind == MediaKind.SERIES) {
+                            model.browse(kind = MediaKind.SERIES)
+                        }
+                        CatalogButton("Popular", selected = state.collection == CatalogCollection.POPULAR) {
+                            model.browse(collection = CatalogCollection.POPULAR)
+                        }
+                        CatalogButton("Top rated", selected = state.collection == CatalogCollection.TOP_RATED) {
+                            model.browse(collection = CatalogCollection.TOP_RATED)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        CatalogButton(
+                            state.genres.firstOrNull { it.id == state.genreId }?.name ?: "All genres",
+                            enabled = state.genres.isNotEmpty() && !state.loading,
+                        ) { choosingGenre = true }
+                        Text("TMDB metadata · Playback availability is separate", color = CatalogMuted, fontSize = 13.sp,
+                            modifier = Modifier.weight(1f))
+                    }
+                }
+                if (state.section == CatalogSection.HISTORY || state.section == CatalogSection.HOME) {
+                    historyError?.let {
+                        Text("Watch history: $it", color = Color(0xFFFFB4AB), fontSize = 14.sp,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                if (state.section == CatalogSection.WATCH_LATER) {
+                    WatchLaterStatus(watchLater, model::loadWatchLater)
+                    if (watchLater.loaded && watchLater.titles.isEmpty()) {
+                        Text("Watch later is empty. Open a movie or series and choose Add to Watch later.",
+                            color = CatalogMuted, fontSize = 18.sp)
+                    }
+                }
+                CatalogStatus(state, model::retry)
+                if (!state.loading && state.error == null && state.searched && state.titles.isEmpty()) {
+                    Text("No matching titles. Try another search, collection or genre.", color = CatalogMuted)
+                    if (state.page > 1) CatalogButton("Previous page") { model.page(state.page - 1) }
+                }
+                if (visibleTitles.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (state.section == CatalogSection.WATCH_LATER) "Watch later · ${visibleTitles.size} / 100"
+                            else "${state.section.label()} · Page ${state.page}",
+                            color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f),
+                        )
+                        if (state.section != CatalogSection.WATCH_LATER) {
+                            if (state.page > 1) CatalogButton("Previous page") { model.page(state.page - 1) }
+                            if (state.hasMore) CatalogButton("Next page") { model.page(state.page + 1) }
+                        }
+                    }
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                         val posterHeight = (maxHeight - 94.dp).coerceIn(60.dp, 220.dp)
                         LazyVerticalGrid(
-                            columns = GridCells.Adaptive(150.dp),
-                            state = resultsScroll,
+                            columns = GridCells.Adaptive(150.dp), state = resultsScroll,
                             modifier = Modifier.fillMaxSize(),
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
                         ) {
-                            itemsIndexed(state.titles, key = { _, title -> title.identity() }) { _, title ->
+                            itemsIndexed(visibleTitles, key = { _, title -> title.identity() }) { _, title ->
                                 val requester = remember { FocusRequester() }
                                 LaunchedEffect(pendingResultFocus) {
                                     if (pendingResultFocus == title.identity()) {
+                                        val index = resultsScroll.firstVisibleItemIndex
+                                        val offset = resultsScroll.firstVisibleItemScrollOffset
                                         withFrameNanos { }
                                         requester.requestFocus()
+                                        withFrameNanos { }
+                                        resultsScroll.scrollToItem(index, offset)
                                         pendingResultFocus = null
                                     }
                                 }
-                                CatalogTile(Modifier.focusRequester(requester), onClick = { model.select(title) }) {
+                                fun saveViewport() {
+                                    model.saveViewport(listKey, CatalogViewport(
+                                        resultsScroll.firstVisibleItemIndex,
+                                        resultsScroll.firstVisibleItemScrollOffset, title.identity(),
+                                    ))
+                                }
+                                CatalogTile(
+                                    Modifier.focusRequester(requester).onFocusChanged { if (it.isFocused) saveViewport() },
+                                    onClick = {
+                                        saveViewport()
+                                        model.select(title)
+                                    },
+                                ) {
                                     CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
                                         Modifier.fillMaxWidth().height(posterHeight))
                                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -729,27 +1018,26 @@ fun MovieCatalogScreen(
                             }
                         }
                     }
-                } else if (showHistory) {
-                    CatalogHistoryRow(
-                        latestHistory,
-                        Modifier.weight(1f).fillMaxWidth(),
-                        pendingFocus = pendingHistoryFocus,
-                        onFocusRestored = { pendingHistoryFocus = null },
-                    ) { entry, requester ->
-                        historyFocus = requester
-                        resumeEntry = entry
-                    }
-                } else if (welcoming) {
-                    Column(
-                        Modifier.weight(1f).fillMaxWidth().padding(start = 4.dp, top = 10.dp),
-                        verticalArrangement = Arrangement.Bottom,
-                    ) {
-                        Text("Your next story starts here.", color = CatalogMuted, fontSize = 18.sp)
-                        Text("Movie and series metadata by TMDB", color = CatalogMuted, fontSize = 12.sp)
+                } else if (state.section == CatalogSection.HISTORY) {
+                    if (latestHistory.isEmpty()) {
+                        Text("History is empty. Titles appear here after playback.", color = CatalogMuted, fontSize = 18.sp)
+                    } else {
+                        CatalogHistoryRow(
+                            latestHistory, Modifier.weight(1f).fillMaxWidth(), historyScroll,
+                            pendingFocus = pendingHistoryFocus,
+                            onFocusRestored = { pendingHistoryFocus = null },
+                            onFocused = ::rememberHistory,
+                        ) { entry ->
+                            rememberHistory(entry)
+                            resumeEntry = entry
+                        }
                     }
                 }
             }
-            CatalogRoute.DETAILS -> CatalogDetailsContent(state, model::retry, model::findSources, model::selectSeason)
+            CatalogRoute.DETAILS -> CatalogDetailsContent(
+                state, model::retry, model::findSources, model::selectSeason,
+                watchLater, model::loadWatchLater, model::toggleWatchLater,
+            )
             CatalogRoute.EPISODES -> CatalogEpisodesContent(state, model::retry, model::findSources)
             CatalogRoute.NEXT_EPISODE -> {
                 CatalogReadable(state.selected?.title.orEmpty(), heading = true)
@@ -780,15 +1068,12 @@ fun MovieCatalogScreen(
 private fun CatalogHistoryRow(
     entries: List<WatchEntry>,
     modifier: Modifier,
+    scroll: LazyListState,
     pendingFocus: String?,
     onFocusRestored: () -> Unit,
-    select: (WatchEntry, FocusRequester) -> Unit,
+    onFocused: (WatchEntry) -> Unit,
+    select: (WatchEntry) -> Unit,
 ) {
-    val scroll = rememberLazyListState()
-    LaunchedEffect(pendingFocus) {
-        val index = entries.indexOfFirst { it.titleKey == pendingFocus }
-        if (index >= 0) scroll.scrollToItem(index)
-    }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Continue watching · Watched", color = Color.White, fontSize = 22.sp)
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -799,19 +1084,24 @@ private fun CatalogHistoryRow(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
             ) {
-                items(entries, key = { it.titleKey }) { entry ->
+                items(entries, key = { it.key }) { entry ->
                     val requester = remember { FocusRequester() }
                     LaunchedEffect(pendingFocus) {
-                        if (pendingFocus == entry.titleKey) {
+                        if (pendingFocus == entry.key) {
+                            val index = scroll.firstVisibleItemIndex
+                            val offset = scroll.firstVisibleItemScrollOffset
                             withFrameNanos { }
                             requester.requestFocus()
+                            withFrameNanos { }
+                            scroll.scrollToItem(index, offset)
                             onFocusRestored()
                         }
                     }
                     val title = entry.selection.details.title
                     CatalogTile(
-                        Modifier.width(188.dp).focusRequester(requester),
-                        onClick = { select(entry, requester) },
+                        Modifier.width(188.dp).focusRequester(requester)
+                            .onFocusChanged { if (it.isFocused) onFocused(entry) },
+                        onClick = { select(entry) },
                     ) {
                         CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
                             Modifier.fillMaxWidth().height(posterHeight))
@@ -852,6 +1142,8 @@ private fun CatalogResumeDialog(
     onResume: (Boolean) -> Unit,
     onChooseSource: () -> Unit,
     onChooseEpisode: () -> Unit,
+    onRemove: () -> Unit,
+    onSetCompleted: () -> Unit,
 ) {
     val initialFocus = remember { FocusRequester() }
     Dialog(onDismissRequest = onDismiss) {
@@ -868,6 +1160,10 @@ private fun CatalogResumeDialog(
                 item {
                     Text("S${episode.season} · E${episode.number} — ${episode.title}",
                         color = CatalogAccent, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                item {
+                    Text("History changes below affect only this episode, not the whole series.",
+                        color = CatalogMuted, fontSize = 14.sp)
                 }
             }
             item {
@@ -890,6 +1186,18 @@ private fun CatalogResumeDialog(
                 )) { onResume(true) }
             }
             item { CatalogButton("Choose another source", Modifier.fillMaxWidth(), onClick = onChooseSource) }
+            item {
+                CatalogButton(
+                    if (entry.completed) "Mark unwatched · reset saved position" else "Mark watched",
+                    Modifier.fillMaxWidth(), onClick = onSetCompleted,
+                )
+            }
+            item {
+                CatalogButton(
+                    if (entry.selection.episode != null) "Remove this episode from history" else "Remove from history",
+                    Modifier.fillMaxWidth(), onClick = onRemove,
+                )
+            }
             item { CatalogButton("Back", Modifier.fillMaxWidth(), onClick = onDismiss) }
         }
         LaunchedEffect(Unit) {
@@ -913,11 +1221,28 @@ private fun formatWatchTime(milliseconds: Long): String {
 }
 
 @Composable
+private fun WatchLaterStatus(state: WatchLaterState, retry: () -> Unit) {
+    if (state.busy) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(22.dp), color = CatalogAccent, strokeWidth = 2.dp)
+            Text(if (state.loaded) "Saving Watch later…" else "Loading Watch later…", color = CatalogMuted)
+        }
+    }
+    state.error?.let {
+        Text(it, color = Color(0xFFFFB4AB), fontSize = 14.sp)
+        if (!state.loaded) CatalogButton("Retry loading Watch later", enabled = !state.busy, onClick = retry)
+    }
+}
+
+@Composable
 private fun CatalogDetailsContent(
     state: MovieCatalogState,
     retry: () -> Unit,
     sources: (CatalogEpisode?) -> Unit,
     season: (Int) -> Unit,
+    watchLater: WatchLaterState,
+    retryWatchLater: () -> Unit,
+    toggleWatchLater: (CatalogTitle) -> Unit,
 ) {
     val title = state.details?.title ?: state.selected ?: return
     LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -935,6 +1260,14 @@ private fun CatalogDetailsContent(
             }
         }
         item { CatalogStatus(state, retry) }
+        item { WatchLaterStatus(watchLater, retryWatchLater) }
+        item {
+            CatalogButton(
+                if (watchLater.titles.any { it.identity() == title.identity() }) "Remove from Watch later"
+                else "Add to Watch later",
+                Modifier.fillMaxWidth(), enabled = watchLater.loaded && !watchLater.busy,
+            ) { toggleWatchLater(title) }
+        }
         item { CatalogReadable(title.title, heading = true) }
         if (title.originalTitle.isNotBlank() && title.originalTitle != title.title) {
             item { CatalogReadable("Original title: ${title.originalTitle}") }
@@ -1120,7 +1453,7 @@ private fun CatalogStatus(state: MovieCatalogState, retry: () -> Unit) {
     if (state.loading) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         CircularProgressIndicator(Modifier.size(22.dp), color = CatalogAccent, strokeWidth = 2.dp)
         Text(when (state.route) {
-            CatalogRoute.RESULTS -> "Searching TMDB…"
+            CatalogRoute.RESULTS -> if (state.section == CatalogSection.DISCOVERY) "Loading TMDB discovery…" else "Searching TMDB…"
             CatalogRoute.DETAILS -> "Loading title details…"
             CatalogRoute.EPISODES -> "Loading episodes…"
             CatalogRoute.SOURCES -> "Requesting torrent sources…"

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added Home discovery with TMDB popular/top-rated movie and series collections, media-specific localized genres, bounded pagination and explicit separation from source availability.
+- Added a persistent, source-independent Watch later list with detail-screen add/remove actions, a 100-title limit, atomic storage and visible load/save failures.
+- Added exact movie/episode history removal and watched/unwatched actions; unwatched resets the saved position while other entries and recency order remain unchanged. History now exposes older episodes individually.
+- Restore each search/discovery/saved-list viewport and focused card on return from details, and preserve history focus with removal fallback.
+- Verified real collections, genres, pagination, saved-list persistence across relaunch, exact-episode history edits and scrolled search/discovery focus restoration on WK03K in an isolated app. All 147 JVM tests, debug build and lint passed; the installed signed release and its data were unchanged.
+
 ## 0.4.0 — 2026-10-19 (pre-release)
 
 - Prepared a signed ARMv7 preview with version code 5 for same-certificate in-place updates from earlier releases.
