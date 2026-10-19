@@ -27,7 +27,7 @@ class StremioSources(private val manifestUrl: String) {
         val streams = response.optJSONArray("streams") ?: throw IOException("Source provider returned no stream list.")
         if (streams.length() > MAX_STREAMS) throw IOException("Source provider returned more than $MAX_STREAMS entries. Narrow its configuration.")
         val provider = data.catalogText("name", 128).ifEmpty { "Stremio provider" }
-        val sources = linkedMapOf<Pair<String, Int?>, CatalogSource>()
+        val sources = ArrayList<CatalogSource>(streams.length())
         var unsupported = 0
         var mismatched = 0
         for (index in 0 until streams.length()) {
@@ -59,14 +59,12 @@ class StremioSources(private val manifestUrl: String) {
             val source = CatalogSource(provider, hash, fileIndex, filename,
                 name.ifEmpty { "Torrent source" }, description, quality, languages(stream, metadata), size, seeders,
                 trackers(stream.optJSONArray("sources")))
-            val key = hash to fileIndex
-            val previous = sources[key]
-            sources[key] = if (previous == null) source else merge(previous, source)
+            sources.add(source)
         }
         if (sources.isEmpty() && mismatched > 0) {
             throw IOException("Provider sources name a different year or episode. No matching torrent source was accepted.")
         }
-        return SourcePage(sources.values.sortedWith(
+        return SourcePage(mergeSourceRecords(sources).sortedWith(
             compareBy<CatalogSource> { qualityRank(it.quality) }
                 .thenByDescending { it.seeders ?: -1 }
                 .thenBy { it.sizeBytes ?: Long.MAX_VALUE }
@@ -161,19 +159,6 @@ class StremioSources(private val manifestUrl: String) {
         val size = number * multiplier
         return size.takeIf { it.isFinite() && it > 0 && it < Long.MAX_VALUE.toDouble() }?.toLong()
     }
-
-    private fun merge(first: CatalogSource, second: CatalogSource): CatalogSource {
-        val preferred = if (metadataScore(second) > metadataScore(first)) second else first
-        val other = if (preferred === first) second else first
-        return preferred.copy(filename = preferred.filename ?: other.filename, quality = preferred.quality ?: other.quality,
-            languages = (preferred.languages + other.languages).distinct(), sizeBytes = preferred.sizeBytes ?: other.sizeBytes,
-            seeders = listOfNotNull(preferred.seeders, other.seeders).maxOrNull(), trackers = (preferred.trackers + other.trackers).distinct())
-    }
-
-    private fun metadataScore(source: CatalogSource): Int =
-        (if (source.filename != null) 4 else 0) + (if (source.quality != null) 1 else 0) +
-            (if (source.sizeBytes != null) 1 else 0) + (if (source.seeders != null) 1 else 0) +
-            (if (source.languages.isNotEmpty()) 1 else 0)
 
     private fun qualityRank(quality: String?): Int = when (quality) {
         "1080p" -> 0; "720p" -> 1; "480p" -> 2; "2160p" -> 3; else -> 4

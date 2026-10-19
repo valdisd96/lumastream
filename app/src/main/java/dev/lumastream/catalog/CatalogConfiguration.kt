@@ -47,6 +47,8 @@ data class CatalogConfiguration(
     val subtitleLanguage: String = DEFAULT_SUBTITLE_LANGUAGE,
     val audioLanguage: String = ORIGINAL_AUDIO_LANGUAGE,
     val openSubtitlesApiKey: String = "",
+    val torrentsDbEnabled: Boolean = false,
+    val mediaFusionEnabled: Boolean = false,
 ) {
     override fun toString(): String = "CatalogConfiguration(token=<redacted>, provider=<redacted>, openSubtitlesApiKey=<redacted>)"
 
@@ -126,6 +128,8 @@ internal fun decodeCatalogConfiguration(text: String): CatalogConfiguration {
         subtitleLanguage = json.optString("subtitleLanguage", DEFAULT_SUBTITLE_LANGUAGE),
         audioLanguage = json.optString("audioLanguage", ORIGINAL_AUDIO_LANGUAGE),
         openSubtitlesApiKey = json.optString("openSubtitlesApiKey"),
+        torrentsDbEnabled = json.optBoolean("torrentsDbEnabled", false),
+        mediaFusionEnabled = json.optBoolean("mediaFusionEnabled", false),
     ).validated()
 }
 
@@ -136,6 +140,8 @@ internal fun encodeCatalogConfiguration(configuration: CatalogConfiguration): St
     .put("subtitleLanguage", configuration.subtitleLanguage)
     .put("audioLanguage", configuration.audioLanguage)
     .put("openSubtitlesApiKey", configuration.openSubtitlesApiKey)
+    .put("torrentsDbEnabled", configuration.torrentsDbEnabled)
+    .put("mediaFusionEnabled", configuration.mediaFusionEnabled)
     .toString()
 
 private fun java.io.InputStream.readBytesBounded(limit: Int): ByteArray {

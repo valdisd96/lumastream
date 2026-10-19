@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-10-19 (pre-release)
+
+- Prepared a signed ARMv7 preview with version code 5 for same-certificate in-place updates from earlier releases.
+- Added independently enabled TorrentsDB and MediaFusion Midnight providers beside the existing configurable source provider; legacy settings preserve their provider and keep additional services disabled until explicitly saved.
+- Fetch source lists concurrently with progressive per-provider status, isolated failures, bounded deadlines and short-lived per-provider caches; exact duplicate URLs are queried only once.
+- Merge duplicate torrent/file provenance without inventing conflicting metadata, preserve ambiguous unindexed filenames, and diversify automatic candidates within existing quality/language and seed-health boundaries.
+- Verified both remote settings toggles, real three-provider Sintel results, cache reuse and automatic playback before full download on WK03K in an isolated app; all 129 JVM tests, debug build and lint passed.
+
 ## 0.3.0 — 2026-10-19 (pre-release)
 
 - Bumped the application to version code 4 for an in-place, same-certificate upgrade from 0.2.1.

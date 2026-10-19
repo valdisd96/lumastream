@@ -14,6 +14,9 @@ class CatalogConfigurationTest {
         assertEquals("en", configuration.subtitleLanguage)
         assertEquals("original", configuration.audioLanguage)
         assertEquals("", configuration.openSubtitlesApiKey)
+        assertFalse(configuration.torrentsDbEnabled)
+        assertFalse(configuration.mediaFusionEnabled)
+        assertEquals(configuration, decodeCatalogConfiguration(encodeCatalogConfiguration(configuration)))
     }
 
     @Test fun allChoicesAndClearedCredentialsSurviveSerializationWithoutLoggingSecrets() {
@@ -24,6 +27,47 @@ class CatalogConfigurationTest {
         assertFalse(selected.toString().contains("tmdb-secret"))
         assertFalse(selected.toString().contains("subtitle-secret"))
         assertFalse(selected.toString().contains(selected.providerManifestUrl))
+    }
+
+    @Test fun legacyConfigurationKeepsPrimaryCredentialsAndPlaybackPreferencesWithoutOptingIn() {
+        val legacy = """{
+            "token":"tmdb-private",
+            "providerManifestUrl":"https://example.org/provider-private/manifest.json",
+            "catalogLanguage":"uk-UA",
+            "subtitleLanguage":"de",
+            "audioLanguage":"ja",
+            "openSubtitlesApiKey":"subtitle-private"
+        }"""
+        val expected = CatalogConfiguration(
+            token = "tmdb-private",
+            providerManifestUrl = "https://example.org/provider-private/manifest.json",
+            catalogLanguage = "uk-UA",
+            subtitleLanguage = "de",
+            audioLanguage = "ja",
+            openSubtitlesApiKey = "subtitle-private",
+            torrentsDbEnabled = false,
+            mediaFusionEnabled = false,
+        )
+        val migrated = decodeCatalogConfiguration(legacy)
+        assertEquals(expected, migrated)
+        assertEquals(expected, decodeCatalogConfiguration(encodeCatalogConfiguration(migrated)))
+    }
+
+    @Test fun providerOptInsPersistIndependentlyAndCanBeDisabledWithoutChangingOtherSettings() {
+        val original = CatalogConfiguration(
+            token = "tmdb-private",
+            providerManifestUrl = "https://example.org/provider-private/manifest.json",
+            catalogLanguage = "fr-FR",
+            subtitleLanguage = "uk",
+            audioLanguage = "de",
+            openSubtitlesApiKey = "subtitle-private",
+        )
+        var saved = original
+        for ((torrentsDb, mediaFusion) in listOf(true to false, false to true, true to true, false to false)) {
+            val selection = saved.copy(torrentsDbEnabled = torrentsDb, mediaFusionEnabled = mediaFusion)
+            saved = decodeCatalogConfiguration(encodeCatalogConfiguration(selection.validated()))
+            assertEquals(original.copy(torrentsDbEnabled = torrentsDb, mediaFusionEnabled = mediaFusion), saved)
+        }
     }
 
     @Test fun invalidPreferencesAndKeysAreRejectedWithoutEchoingCredentials() {

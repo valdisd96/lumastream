@@ -54,6 +54,8 @@ fun CatalogSettingsScreen(
     var subtitleLanguage by remember(configuration) { mutableStateOf(configuration.subtitleLanguage) }
     var audioLanguage by remember(configuration) { mutableStateOf(configuration.audioLanguage) }
     var subtitleKey by remember(configuration) { mutableStateOf(configuration.openSubtitlesApiKey) }
+    var torrentsDbEnabled by remember(configuration) { mutableStateOf(configuration.torrentsDbEnabled) }
+    var mediaFusionEnabled by remember(configuration) { mutableStateOf(configuration.mediaFusionEnabled) }
     var choosingLanguage by remember { mutableStateOf<String?>(null) }
     var validationError by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
@@ -152,6 +154,36 @@ fun CatalogSettingsScreen(
             }
         }
         item {
+            Text("Additional source providers (optional)", color = Color.White, fontSize = 20.sp)
+            Text("Your configured primary provider remains active. Enable additional services below with OK; Save applies your choices. Back leaves settings unchanged.", color = Color(0xFFBCC5D7))
+        }
+        item {
+            Button(
+                colors = buttonColors,
+                enabled = !saving,
+                onClick = { torrentsDbEnabled = !torrentsDbEnabled },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("TorrentsDB: ${if (torrentsDbEnabled) "On" else "Off"} · torrentsdb.com", color = Color.White)
+            }
+        }
+        item {
+            Button(
+                colors = buttonColors,
+                enabled = !saving,
+                onClick = { mediaFusionEnabled = !mediaFusionEnabled },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column {
+                    Text("MediaFusion Midnight: ${if (mediaFusionEnabled) "On" else "Off"}", color = Color.White)
+                    Text("mediafusionfortheweebs.midnightignite.me", color = Color(0xFFBCC5D7), fontSize = 13.sp)
+                }
+            }
+        }
+        item {
+            Text("Enabled services receive the selected title/episode ID and see your network IP when sources are requested. Disabled additional services receive no requests. Only use content you are authorized to download and share. Results do not guarantee availability, playback, ownership or permission.", color = Color(0xFFBCC5D7))
+        }
+        item {
             Text("Choose the language for catalog titles, descriptions and episode information. This does not change playback audio or subtitles.", color = Color(0xFFBCC5D7))
         }
         item {
@@ -193,6 +225,7 @@ fun CatalogSettingsScreen(
                         token = token, providerManifestUrl = provider, catalogLanguage = catalogLanguage,
                         subtitleLanguage = subtitleLanguage, audioLanguage = audioLanguage,
                         openSubtitlesApiKey = subtitleKey,
+                        torrentsDbEnabled = torrentsDbEnabled, mediaFusionEnabled = mediaFusionEnabled,
                     ).validated()
                     validationError = null
                     onSave(value)

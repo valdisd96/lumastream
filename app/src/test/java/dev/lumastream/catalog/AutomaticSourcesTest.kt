@@ -78,4 +78,50 @@ class AutomaticSourcesTest {
             rankAutomaticSources(listOf(stale, fifth, fourth, best, secondFile, unspecifiedFile),
                 "1080p", listOf("en")) { true })
     }
+
+    @Test fun keepsBestFirstThenDiversifiesWithinStrictCohortBeforeNormalRanking() {
+        val best = source("best", seeders = 100).copy(providerIds = setOf("primary"))
+        val second = source("second", seeders = 90).copy(providerIds = setOf("primary"))
+        val third = source("third", seeders = 80).copy(providerIds = setOf("primary"))
+        val torrentsDb = source("torrents-db", seeders = 20).copy(providerIds = setOf("torrentsdb"))
+        val mediaFusion = source("media-fusion", seeders = 10).copy(providerIds = setOf("mediafusion"))
+        val otherQuality = source("other-quality", quality = "720p", seeders = 1000)
+            .copy(providerIds = setOf("outside-quality"))
+        val otherLanguage = source("other-language", languages = listOf("fr"), seeders = 1000)
+            .copy(providerIds = setOf("outside-language"))
+        val warned = source("warned", seeders = 1000).copy(providerIds = setOf("incompatible"))
+        assertEquals(listOf(best, torrentsDb, mediaFusion, second),
+            rankAutomaticSources(listOf(third, second, torrentsDb, mediaFusion, otherQuality,
+                otherLanguage, warned, best), "1080p", listOf("en")) { it !== warned })
+    }
+
+    @Test fun provenanceAlreadyOnBestDoesNotCountAsAnotherIndependentTorrent() {
+        val best = source("ABC", seeders = 100).copy(providerIds = setOf("primary", "torrentsdb"))
+        val duplicate = source("abc", seeders = 90).copy(providerIds = setOf("torrentsdb"))
+        val represented = source("represented", seeders = 80).copy(providerIds = setOf("torrentsdb"))
+        val newProvider = source("new-provider", seeders = 10).copy(providerIds = setOf("mediafusion"))
+        val ordinary = source("ordinary", seeders = 70).copy(providerIds = setOf("primary"))
+        assertEquals(listOf(best, newProvider, represented, ordinary),
+            rankAutomaticSources(listOf(duplicate, represented, ordinary, newProvider, best),
+                "1080p", listOf("en")) { true })
+    }
+
+    @Test fun diversificationNeverPromotesZeroSeedReportsAbovePositiveOrUnknown() {
+        val best = source("best", seeders = 100).copy(providerIds = setOf("primary"))
+        val healthy = source("healthy", seeders = 1).copy(providerIds = setOf("primary"))
+        val unknown = source("unknown").copy(providerIds = setOf("primary"))
+        val zero = source("zero", seeders = 0).copy(providerIds = setOf("torrentsdb"))
+        assertEquals(listOf(best, healthy, unknown, zero),
+            rankAutomaticSources(listOf(zero, unknown, healthy, best), "1080p", listOf("en")) { true })
+    }
+
+    @Test fun nullIndexFilenameAlternativesCannotOccupyMultipleAutomaticSlots() {
+        val first = source("ABC", seeders = 100, fileIndex = null)
+            .copy(filename = "first.mkv", providerIds = setOf("primary"))
+        val ambiguous = source("abc", seeders = 90, fileIndex = null)
+            .copy(filename = "second.mkv", providerIds = setOf("torrentsdb"))
+        val independent = source("other", seeders = 10).copy(providerIds = setOf("mediafusion"))
+        assertEquals(listOf(first, independent),
+            rankAutomaticSources(listOf(first, ambiguous, independent), "1080p", listOf("en")) { true })
+    }
 }
