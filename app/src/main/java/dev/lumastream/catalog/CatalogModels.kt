@@ -47,6 +47,7 @@ data class CatalogSource(
     val sizeBytes: Long?,
     val seeders: Int?,
     val trackers: List<String>,
+    val providerIds: Set<String> = emptySet(),
 )
 data class SourcePage(val sources: List<CatalogSource>, val unsupportedCount: Int)
 data class CatalogSelection(val details: CatalogDetails, val episode: CatalogEpisode?, val source: CatalogSource)

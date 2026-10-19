@@ -4,13 +4,13 @@ An Android TV application for playing torrents before the download completes, in
 
 ## Download
 
-The latest signed preview is [v0.2.1](https://github.com/valdisd96/lumastream/releases/tag/v0.2.1). Download `lumastream-0.2.1-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
+The latest signed preview is [v0.4.0](https://github.com/valdisd96/lumastream/releases/tag/v0.4.0). Download `lumastream-0.4.0-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
 
-Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.2.1-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.4.0-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
 
 The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
 
-Version 0.2.1 has `versionCode=3` and uses the same release certificate as 0.1.0 and 0.2.0. Install it over either signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible.
+Version 0.4.0 has `versionCode=5` and uses the same release certificate as earlier signed previews, including the locally deployed 0.3.0. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. New source providers remain opt-in under Settings.
 
 ## Current functionality
 
@@ -37,9 +37,13 @@ Search-first Home verification on WK03K: build, unit tests and lint passed. An e
 
 The final build also exercised Home search → Sintel details → source selection → real playback. The first frame arrived with 3,063,808 of 143,100,616 bytes downloaded; a screenshot showed video and playback positions advanced. Back stopped the native session and restored catalog source selection; subsequent Back presses returned through details/results and exited to the launcher. No renewed audible-sound claim is made.
 
-Settings accept an HTTPS Stremio `/manifest.json` URL. The current default is Torrentio; live source lists were exercised on the projector for Sintel, Big Buck Bunny and The Studio S1E2, and catalog-selected Sintel playback was verified. Only torrent `infoHash` streams are supported; HTTP video, debrid, DRM and external-player streams are not. Provider availability and permission to obtain each work are separate concerns. Metadata access is not permission to download a work.
+Settings retain the configurable HTTPS Stremio `/manifest.json` URL (initially Torrentio) as the primary provider. **TorrentsDB** (`https://torrentsdb.com/manifest.json`) and **MediaFusion Midnight** (`https://mediafusionfortheweebs.midnightignite.me/manifest.json`) are separate opt-in buttons near the top of Settings. Set each to **On**, then **Save settings**; Back discards unsaved changes. Both start disabled, including when loading older settings, and the existing primary URL, credentials and preferences remain unchanged. Each enabled service receives the selected IMDb title/episode ID and network IP; disabled additional services receive no requests. No debrid account is needed for these direct-torrent endpoints. Public-service availability, limits and terms can change; protocol access does not grant permission to download a work.
 
-Sources display provider-reported quality, languages, size and seeders only when available. Identity checks precede selection; duplicates are combined by hash and selected file. Actual torrent file metadata is checked before playback: contradictory filename/year/episode information or ambiguous episode files produce an error rather than selecting the largest video.
+Source lookup queries enabled, distinct provider URLs concurrently (at most three calls), publishes each completed result immediately, and shows per-provider searching/success/error status. A slow or failed service does not discard another service's results; sources can be selected before all requests finish. A provider has a 30-second deadline covering manifest and stream lookup, with no automatic retries. Existing HTTP cooldowns remain per-provider, and safe network/access/rate-limit failures are shown without exposing credentials or remote error bodies. Each provider retains up to 12 successful title/episode pages for two minutes in memory; returning to a recent list or retrying a failed service reuses successful cached pages, marked **cached**. Configuration changes replace clients and clear this transient cache. Per-provider limits remain 500 stream entries and 2 MiB per JSON response; the combined source bound is 1,500. Only torrent `infoHash` streams are supported; HTTP video, debrid, DRM and external-player streams are not.
+
+Sources display provider-reported quality, languages, size and seeders only when available. Status counts are per-provider, before cross-provider deduplication. Duplicate torrent/file records combine provenance (for example **Torrentio + TorrentsDB**) but retain one complete metadata record instead of inventing a union of conflicting language, quality or size hints. Hash comparison is case-insensitive and file indices must match exactly; without an index, different or missing filenames remain separate because file identity is unproven. Trackers are combined only when filenames agree exactly. Actual torrent metadata is still checked before playback: contradictory filename/year/episode information or ambiguous episode files produce an error rather than selecting the largest video.
+
+Multi-provider verification on WK03K used a separately identified debug app, leaving the installed signed 0.3.0 and its data unchanged. The remote enabled both optional providers and Save persisted their choices while preserving the token; before Save, persisted settings remained unchanged. Real Sintel lookup displayed Torrentio (5 sources), TorrentsDB (5), and MediaFusion Midnight (25), including a merged Torrentio + TorrentsDB card. Reopening within the TTL showed all three cached statuses. The shared automatic 720p picker rendered a first frame after 7.794 seconds with 2,506,752 / 143,100,616 bytes downloaded; visible playback advanced and Back stopped the native session. Debug build, lint and all 129 JVM tests passed, including migration, independent failures, progressive publication, cancellation, deadlines, cache boundaries, duplicate identity and provider-diversity regressions. This does not verify every returned torrent, renewed audible sound, or sustained throughput.
 
 Source cards show advisory warnings for explicit 3D/stereoscopic labels, codecs absent from the device's advertised decoders, and reported dimensions rejected by every candidate decoder. Decoder capabilities are queried on the device, not hardcoded for the projector. Missing/conflicting hints or failed capability queries remain unknown; no warning is not a compatibility guarantee. Resolution-only labels do not invent a width, and warnings never hide or block a source. Actual codec profiles, frame rate, HDR and stream integrity still require playback.
 
@@ -47,7 +51,7 @@ Playback errors distinguish unsupported formats, decoder limits, decoder startup
 
 Compatibility verification on WK03K: debug build, all 93 unit tests (including 15 compatibility regressions), and lint passed. An isolated temporary debug application used real device decoder capabilities with a synthetic `H264 1920x2160 3D` source card; screenshots confirmed readable stereoscopic and decoder-limit warnings with Play still visible. An injected Media3 capability error exercised the production error formatter/screen, and a separate IO error retained its underlying cause without decoder advice. This checks warnings and error presentation, not playback of an incompatible video. The installed signed v0.2.0 and its data were not replaced; temporary verification code/apps were removed.
 
-**Automatic source selection:** choose **Watch automatically…** above the source cards, then explicitly choose a quality/provider-language group. Unknown labels remain a separate group; the picker never silently lowers quality or changes the reported language set. Language labels are not verified audio tracks. Sources with compatibility warnings remain manually selectable but are excluded from automatic selection. Within the chosen group, positive reported seed counts rank first (descending), unknown counts next, zero last; positive reported size breaks ties only and is not treated as an episode bitrate. Duplicate hash/file selections are combined and at most four candidates are attempted.
+**Automatic source selection:** choose **Watch automatically…** above the source cards, then explicitly choose a quality/provider-language group. Unknown labels remain a separate group; the picker never silently lowers quality or changes the reported language set. Language labels are not verified audio tracks. Sources with compatibility warnings remain manually selectable but are excluded from automatic selection. Within the chosen group, positive reported seed counts rank first (descending), unknown counts next, zero last; positive reported size breaks ties only and is not treated as an episode bitrate. After the best candidate, the picker prefers previously unrepresented providers within the best remaining seed-health category, without promoting zero-seeder reports over positive/unknown sources. Duplicate hash/file selections are attempted only once and at most four candidates are attempted. Opening the group picker snapshots its candidates so late provider responses do not move choices or change a queued playback attempt.
 
 Automatic startup uses one native session at a time and the real Media3 playback path, not a metadata-only availability probe. It allows up to 15 seconds for metadata and file identification, 35 seconds for the entire attempt, and 120 seconds overall, including teardown between attempts. Mandatory native cleanup can finish after the deadline; no new attempt starts once the overall budget expires. Errors or missing first frames advance to the next candidate only before the first rendered frame. At that frame, the source is committed and automatic switching stops. This improves source selection, not the bandwidth of an unhealthy swarm, and does not guarantee sustained playback speed.
 
@@ -115,16 +119,16 @@ With `JAVA_HOME` and `ANDROID_HOME` configured as above:
 ./gradlew assembleRelease testReleaseUnitTest lintRelease
 TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 SIGNING="$HOME/.config/lumastream/signing"
-OUT=".local/release-v0.3.0"
+OUT=".local/release-v0.4.0"
 mkdir -p "$OUT"
 "$TOOLS/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$OUT/aligned.apk"
 "$TOOLS/apksigner" sign \
   --ks "$SIGNING/release.p12" --ks-key-alias lumastream \
   --ks-pass "file:$SIGNING/store-password" \
-  --out "$OUT/lumastream-0.3.0-armeabi-v7a.apk" "$OUT/aligned.apk"
-"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.3.0-armeabi-v7a.apk"
-"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.3.0-armeabi-v7a.apk"
-(cd "$OUT" && shasum -a 256 lumastream-0.3.0-armeabi-v7a.apk > SHA256SUMS)
+  --out "$OUT/lumastream-0.4.0-armeabi-v7a.apk" "$OUT/aligned.apk"
+"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.4.0-armeabi-v7a.apk"
+"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.4.0-armeabi-v7a.apk"
+(cd "$OUT" && shasum -a 256 lumastream-0.4.0-armeabi-v7a.apk > SHA256SUMS)
 ```
 
 Release certificate SHA-256: `c113d8eb54f1eb4cdfe327612236e7dbd7cedce27ab9235a4f4938ad01e35f70`.

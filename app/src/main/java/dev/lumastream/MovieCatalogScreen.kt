@@ -82,7 +82,9 @@ import dev.lumastream.catalog.CatalogSource
 import dev.lumastream.catalog.CatalogTitle
 import dev.lumastream.catalog.MediaKind
 import dev.lumastream.catalog.SourcePage
-import dev.lumastream.catalog.StremioSources
+import dev.lumastream.catalog.MultiSourceProviders
+import dev.lumastream.catalog.SourceProviderState
+import dev.lumastream.catalog.SourceProviderStatus
 import dev.lumastream.catalog.TmdbCatalog
 import dev.lumastream.catalog.findNextEpisode
 import dev.lumastream.catalog.rankAutomaticSources
@@ -113,6 +115,7 @@ private data class MovieCatalogState(
     val episodesLoaded: Boolean = false,
     val episode: CatalogEpisode? = null,
     val sources: SourcePage? = null,
+    val providerStatuses: List<SourceProviderStatus> = emptyList(),
     val historySources: Boolean = false,
     val loading: Boolean = false,
     val error: String? = null,
@@ -125,7 +128,7 @@ private class MovieCatalogViewModel : ViewModel() {
     val state = mutableState.asStateFlow()
     private var configuration: CatalogConfiguration? = null
     private var catalog: TmdbCatalog? = null
-    private var provider: StremioSources? = null
+    private var provider: MultiSourceProviders? = null
     private var active = false
     private var generation = 0L
     private var request: Job? = null
@@ -135,7 +138,7 @@ private class MovieCatalogViewModel : ViewModel() {
         cancel()
         configuration = value
         catalog = value.token.takeIf { it.isNotBlank() }?.let { TmdbCatalog(it, value.catalogLanguage) }
-        provider = StremioSources(value.providerManifestUrl)
+        provider = MultiSourceProviders(value)
         mutableState.value = MovieCatalogState(focusEpoch = state.value.focusEpoch + 1)
     }
 
@@ -145,17 +148,25 @@ private class MovieCatalogViewModel : ViewModel() {
         generation++
         request?.cancel()
         request = null
-        mutableState.update { it.copy(loading = false) }
+        mutableState.update {
+            it.copy(loading = false, providerStatuses = it.providerStatuses.map { status ->
+                if (status.state == SourceProviderState.LOADING) status.copy(
+                    state = SourceProviderState.ERROR, error = "Search cancelled. Retry to finish.",
+                ) else status
+            })
+        }
     }
 
     fun deactivate() {
         active = false
         val pending = state.value.loading
         cancel()
-        if (pending) mutableState.update { it.copy(error = "Request cancelled. Select Retry to continue.") }
+        if (pending && state.value.route != CatalogRoute.SOURCES) {
+            mutableState.update { it.copy(error = "Request cancelled. Select Retry to continue.") }
+        }
     }
 
-    private fun load(block: suspend () -> MovieCatalogState) {
+    private fun load(afterLoad: (() -> Unit)? = null, block: suspend () -> MovieCatalogState) {
         if (!active) return
         cancel()
         val revision = generation
@@ -164,7 +175,10 @@ private class MovieCatalogViewModel : ViewModel() {
             try {
                 val result = block()
                 ensureActive()
-                if (active && revision == generation) mutableState.value = result.copy(loading = false, error = null)
+                if (active && revision == generation) {
+                    mutableState.value = result.copy(loading = false, error = null)
+                    afterLoad?.invoke()
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -287,17 +301,16 @@ private class MovieCatalogViewModel : ViewModel() {
         val title = current.selected ?: return
         val episode = current.episode ?: return
         mutableState.update { it.copy(nextEpisodeAbsent = false) }
-        load {
+        load(afterLoad = { if (state.value.route == CatalogRoute.SOURCES) loadSources() }) {
             val client = catalog ?: error("Configure a TMDB API read access token to find the next episode.")
             val details = client.details(title)
             val next = findNextEpisode(details, episode) { client.episodes(details, it) }
             if (next == null) {
                 current.copy(details = details, nextEpisodeAbsent = true)
             } else {
-                val sources = checkNotNull(provider).sources(details, next.episode)
                 current.copy(route = CatalogRoute.SOURCES, details = details, selected = details.title,
                     episode = next.episode, season = next.episode.season, episodes = next.seasonEpisodes,
-                    episodesLoaded = true, sources = sources, nextEpisodeAbsent = false,
+                    episodesLoaded = true, sources = null, providerStatuses = emptyList(), nextEpisodeAbsent = false,
                     focusEpoch = current.focusEpoch + 1)
             }
         }
@@ -307,7 +320,27 @@ private class MovieCatalogViewModel : ViewModel() {
         val client = provider ?: return
         val current = state.value
         val details = current.details ?: return
-        load { current.copy(sources = client.sources(details, current.episode)) }
+        if (!active) return
+        cancel()
+        val revision = generation
+        mutableState.update { it.copy(sources = null, providerStatuses = emptyList(), loading = true, error = null) }
+        request = viewModelScope.launch {
+            try {
+                client.sources(details, current.episode).collect { result ->
+                    ensureActive()
+                    if (active && revision == generation) mutableState.update {
+                        it.copy(sources = result.page, providerStatuses = result.statuses,
+                            loading = result.loading, error = null)
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (active && revision == generation) mutableState.update {
+                    it.copy(loading = false, error = "Unable to search source providers. Try again.")
+                }
+            }
+        }
     }
 
     fun retry() {
@@ -343,7 +376,10 @@ private class MovieCatalogViewModel : ViewModel() {
     fun selection(source: CatalogSource, expected: CatalogConfiguration): CatalogSelection? {
         val current = state.value
         if (!active || configuration != expected || current.route != CatalogRoute.SOURCES ||
-            current.sources?.sources?.contains(source) != true) return null
+            current.sources?.sources?.none {
+                it.infoHash.equals(source.infoHash, ignoreCase = true) && it.fileIndex == source.fileIndex &&
+                    (it.fileIndex != null || it.filename == source.filename)
+            } != false) return null
         return CatalogSelection(current.details ?: return null, current.episode, source)
     }
 }
@@ -951,7 +987,9 @@ private fun CatalogSourcesContent(
     val episode = state.episode
     val context = LocalContext.current
     val compatibility = remember(context) { SourceCompatibility(context) }
-    var choosingAutomatic by remember(state.details, state.episode, state.sources) { mutableStateOf(false) }
+    var automaticOptions by remember(state.details, state.episode) {
+        mutableStateOf<List<Pair<String, List<CatalogSource>>>?>(null)
+    }
     val sources = state.sources?.sources.orEmpty()
     val automaticGroups = remember(sources, compatibility) {
         sources.groupBy { source ->
@@ -968,9 +1006,9 @@ private fun CatalogSourcesContent(
             }
         }
     }
-    if (choosingAutomatic) {
+    automaticOptions?.let { options ->
         val initialFocus = remember { FocusRequester() }
-        Dialog(onDismissRequest = { choosingAutomatic = false }) {
+        Dialog(onDismissRequest = { automaticOptions = null }) {
             LazyColumn(
                 Modifier.fillMaxWidth().heightIn(max = 440.dp)
                     .background(CatalogBackground, RoundedCornerShape(16.dp)).padding(24.dp),
@@ -985,16 +1023,16 @@ private fun CatalogSourcesContent(
                     Text("Up to 2 minutes, plus session cleanup. You can cancel and choose manually at any time. A quick start does not guarantee sustained speed.",
                         color = CatalogMuted, fontSize = 15.sp)
                 }
-                items(automaticGroups.size) { index ->
-                    val (label, candidates) = automaticGroups[index]
+                items(options.size) { index ->
+                    val (label, candidates) = options[index]
                     CatalogButton("$label · ${candidates.size} source(s)", Modifier.fillMaxWidth().then(
                         if (index == 0) Modifier.focusRequester(initialFocus) else Modifier,
                     )) {
-                        choosingAutomatic = false
+                        automaticOptions = null
                         automatic(candidates)
                     }
                 }
-                item { CatalogButton("Cancel", onClick = { choosingAutomatic = false }) }
+                item { CatalogButton("Cancel", onClick = { automaticOptions = null }) }
             }
             LaunchedEffect(Unit) {
                 withFrameNanos { }
@@ -1014,12 +1052,26 @@ private fun CatalogSourcesContent(
         Text("Torrent sources · Availability is not verified. Only open content you are authorized to share. BitTorrent may upload and exposes your IP to peers.", color = CatalogMuted, fontSize = 13.sp)
         Text("Codec support is unverified until media is read. Seed counts are provider reports, not a guarantee of availability.", color = CatalogMuted, fontSize = 13.sp)
         CatalogStatus(state, retry)
+        state.providerStatuses.forEach { status ->
+            val message = when (status.state) {
+                SourceProviderState.LOADING -> "Searching…"
+                SourceProviderState.SUCCESS -> "${status.sourceCount} source(s)${if (status.cached) " · cached" else ""}"
+                SourceProviderState.ERROR -> status.error ?: "Unavailable. Try again."
+            }
+            Text("${status.label}: $message",
+                color = if (status.state == SourceProviderState.ERROR) Color(0xFFFFB4AB) else CatalogMuted,
+                fontSize = 13.sp)
+        }
+        if (!state.loading && state.providerStatuses.any { it.state == SourceProviderState.ERROR } &&
+            state.sources?.sources?.isNotEmpty() == true) {
+            CatalogButton("Retry unavailable providers", onClick = retry)
+        }
         val page = state.sources
-        if (page != null && page.sources.isEmpty()) {
+        if (page != null && page.sources.isEmpty() && !state.loading) {
             CatalogReadable(if (page.unsupportedCount > 0) {
-                "The provider returned ${page.unsupportedCount} unsupported stream(s), but no supported torrent sources for this selection."
+                "Providers returned ${page.unsupportedCount} unsupported stream(s), but no supported torrent sources for this selection."
             } else {
-                "No torrent sources were returned for this selection. This is not a provider error."
+                "No torrent sources are available from the completed requests. Check provider statuses above."
             })
             CatalogButton("Refresh sources", onClick = retry)
         }
@@ -1028,14 +1080,16 @@ private fun CatalogSourcesContent(
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (automaticGroups.isNotEmpty()) {
                     item {
-                        CatalogButton("Watch automatically…", Modifier.fillMaxWidth()) { choosingAutomatic = true }
+                        CatalogButton("Watch automatically…", Modifier.fillMaxWidth()) {
+                            automaticOptions = automaticGroups
+                        }
                     }
                 } else {
                     item {
                         CatalogReadable("Automatic selection has no candidates without compatibility warnings. You can still choose a source manually.")
                     }
                 }
-                items(page.sources) { source ->
+                items(page.sources, key = { "${it.infoHash}:${it.fileIndex}:${it.filename}" }) { source ->
                     val warnings = remember(source, compatibility) { compatibility.warnings(source) }
                     CatalogTile(Modifier.fillMaxWidth(), onClick = { select(source) }) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {

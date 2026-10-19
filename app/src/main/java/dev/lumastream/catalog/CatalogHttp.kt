@@ -27,7 +27,7 @@ internal class CatalogHttp(private val service: String) {
     suspend fun get(url: String, bearer: String? = null): JSONObject = withContext(Dispatchers.IO) {
         currentCoroutineContext().ensureActive()
         val remaining = cooldownUntil.get() - SystemClock.elapsedRealtime()
-        if (remaining > 0) throw IOException("$service is limiting requests. Try again in ${(remaining + 999) / 1000} seconds.")
+        if (remaining > 0) throw SafeFailure("$service is limiting requests. Try again in ${(remaining + 999) / 1000} seconds.")
         try {
             withTimeoutOrNull(30_000L) {
                 val connection = URL(url).openConnection() as HttpsURLConnection
@@ -85,7 +85,7 @@ internal class CatalogHttp(private val service: String) {
         } catch (failure: IOException) {
             currentCoroutineContext().ensureActive()
             if (failure is SafeFailure) throw failure
-            throw IOException("Cannot connect to $service securely. Check the network and try again.")
+            throw SafeFailure("Cannot connect to $service securely. Check the network and try again.")
         }
     }
 
@@ -118,7 +118,7 @@ internal class CatalogHttp(private val service: String) {
         try { block() } finally { finished.set(true); closer.cancel() }
     }
 
-    private class SafeFailure(message: String) : IOException(message)
+    internal class SafeFailure(message: String) : IOException(message)
     private companion object { const val MAX_BYTES = 2 * 1024 * 1024 }
 }
 
