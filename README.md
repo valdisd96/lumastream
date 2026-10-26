@@ -4,7 +4,7 @@
 
 Open a magnet link or torrent without registering, or connect an optional movie catalog, and start watching **before the download finishes**. LumaStream runs on your TV, phone or tablet — with the torrent engine built in, not on a separate server.
 
-**[Download v0.9.0 preview](https://github.com/valdisd96/lumastream/releases/tag/v0.9.0)** · [Getting started](#getting-started) · [What's new](docs/releases/0.9.0.md) · [Report a problem](https://github.com/valdisd96/lumastream/issues)
+**[Download v0.9.1 preview](https://github.com/valdisd96/lumastream/releases/tag/v0.9.1)** · [Getting started](#getting-started) · [What's new](docs/releases/0.9.1.md) · [Report a problem](https://github.com/valdisd96/lumastream/issues)
 
 **Android 9+ · Android TV / Google TV · Phones & tablets · No separate streaming server**
 
@@ -42,8 +42,8 @@ Screenshots use real app screens. Sintel © Blender Foundation, [CC BY 3.0](http
 
 ### 1. Install the APK
 
-1. Open the **[v0.9.0 download page](https://github.com/valdisd96/lumastream/releases/tag/v0.9.0)** and expand **Assets** if needed.
-2. Download **`lumastream-0.9.0-universal.apk`**. The same file supports TVs, phones and tablets running Android 9 or newer.
+1. Open the **[v0.9.1 download page](https://github.com/valdisd96/lumastream/releases/tag/v0.9.1)** and expand **Assets** if needed.
+2. Download **`lumastream-0.9.1-universal.apk`**. The same file supports TVs, phones and tablets running Android 9 or newer.
 3. On a phone/tablet, open the downloaded APK. On a TV, transfer it to the TV and open it with an APK installer or file manager.
 4. If Android asks, allow **Install unknown apps** for the app opening the APK, then install LumaStream. You can turn that permission off afterward.
 
@@ -110,7 +110,7 @@ Internet Archive search is also available from Home. Review an item's rights and
 
 Found a problem? [Open an issue](https://github.com/valdisd96/lumastream/issues) with the app version, device/Android version, what you did and what happened. Remove tokens, private URLs and personal information from screenshots and logs.
 
-- [Release highlights](docs/releases/0.9.0.md) and [full changelog](CHANGELOG.md)
+- [Release highlights](docs/releases/0.9.1.md) and [full changelog](CHANGELOG.md)
 - [Build, architecture, verification and maintainer guide](docs/maintainer-guide.md)
 - [Release-writing guide](docs/releases.md)
 - [Third-party notices](app/src/main/assets/THIRD_PARTY_NOTICES.md)

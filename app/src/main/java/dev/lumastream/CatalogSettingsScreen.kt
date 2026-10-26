@@ -291,8 +291,8 @@ fun CatalogSettingsScreen(
             Text("Enabled services receive the selected title/episode ID and see your network IP when sources are requested. Disabled additional services receive no requests. Only use content you are authorized to download and share. Results do not guarantee availability, playback, ownership or permission.", color = Color(0xFFBCC5D7))
         }
         Column {
-            Text("Torrent cache and pause prefetch", color = Color.White, fontSize = 20.sp)
-            Text("When enabled, explicitly pausing playback downloads ahead of the video reader until the available disk cache is full. Save applies your choices; Back discards changes.", color = Color(0xFFBCC5D7))
+            Text("Torrent cache and continuous prefetch", color = Color.White, fontSize = 20.sp)
+            Text("When enabled, downloads ahead during playback and while paused until the available disk cache is full. Downloads continue as playback reclaims cache space. Save applies your choices; Back discards changes.", color = Color(0xFFBCC5D7))
         }
         Column {
             AppButton(
@@ -300,7 +300,7 @@ fun CatalogSettingsScreen(
                 onClick = { pausePrefetchEnabled = !pausePrefetchEnabled },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Prefetch while paused: ${if (pausePrefetchEnabled) "On" else "Off"}", color = Color.White)
+                Text("Continuous prefetch: ${if (pausePrefetchEnabled) "On" else "Off"}", color = Color.White)
             }
         }
         Column {

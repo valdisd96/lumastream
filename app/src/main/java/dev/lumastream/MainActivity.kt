@@ -900,7 +900,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                     if (screen.value.player !== player) return
                     engine.setPausePrefetch(
                         screen.value.configuration.pausePrefetchEnabled &&
-                            !player.playWhenReady && player.playerError == null &&
+                            player.playerError == null &&
                             (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING),
                     )
                 }
