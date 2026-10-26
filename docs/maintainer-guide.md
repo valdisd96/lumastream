@@ -28,19 +28,21 @@ An Android application for TVs, phones and tablets that plays torrents before th
 
 ## Download
 
-The latest signed preview is [v0.8.0](https://github.com/valdisd96/lumastream/releases/tag/v0.8.0). Download `lumastream-0.8.0-universal.apk` and `SHA256SUMS` from its assets. One APK supports Android TV / Google TV, phones and tablets on Android 9 / API 28 or later, with ARMv7, ARM64, x86 and x86-64 native libraries and 16 KB-compatible 64-bit libraries. GitHub Packages is not used.
+The latest signed preview is [v0.9.0](https://github.com/valdisd96/lumastream/releases/tag/v0.9.0). Download `lumastream-0.9.0-universal.apk` and `SHA256SUMS` from its assets. One APK supports Android TV / Google TV, phones and tablets on Android 9 / API 28 or later, with ARMv7, ARM64, x86 and x86-64 native libraries and 16 KB-compatible 64-bit libraries. GitHub Packages is not used.
 
-Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.8.0-universal.apk`, or transfer it to the device and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.9.0-universal.apk`, or transfer it to the device and use an APK installer with installation from that source enabled. No account is needed for direct torrent playback. TMDB and OpenSubtitles are optional and default Off; no token or media is bundled.
 
 The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
 
-Version 0.8.0 has `versionCode=10` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. An in-place signed 0.7.0-to-0.8.0 update retained the saved pause-prefetch setting on an isolated tablet emulator.
+Version 0.9.0 has `versionCode=11` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible.
 
-This preview adds adaptive phone/tablet touch layouts while retaining TV remote controls. Mobile and TV regression checks use ARM64 emulators; x86 runtime and physical phone/tablet playback have not been verified. Codec and filesystem support still depend on the device.
+This preview adds credential-free direct input and optional integrations while retaining adaptive phone/tablet layouts and TV remote controls. Earlier mobile and TV regression checks used ARM64 emulators; x86 runtime and physical phone/tablet playback have not been verified. Codec and filesystem support still depend on the device.
+
+Release 0.9.0 verification: `assembleRelease`, all 162 release JVM tests and `lintRelease` passed. The non-debuggable universal APK passed signature, four-ABI native packaging and 16 KB alignment checks; a decompressed-entry scan found no owner TMDB/OpenSubtitles credentials. On WK03K, installing over 0.8.0 without uninstalling retained the package UID, first-install timestamp and visible history; the configured catalog remained available. The pulled installed APK matched the release SHA-256 exactly. Device interaction stopped when other content appeared, so this deployment makes no new projector playback or audible-output claim and does not claim byte-for-byte inspection of private settings/history.
 
 ## Current functionality
 
-- Open magnet links, HTTPS torrent URLs or torrent documents from Home without credentials. Optional TMDB search/discovery provides movie/series metadata; choose a title/episode and source to play. External `ACTION_VIEW` and `ACTION_SEND` torrent inputs remain supported. The published v0.8.0 APK predates the optional-service and direct-input changes described here.
+- Open magnet links, HTTPS torrent URLs or torrent documents from Home without credentials. Optional TMDB search/discovery provides movie/series metadata; choose a title/episode and source to play. External `ACTION_VIEW` and `ACTION_SEND` torrent inputs remain supported.
 - Choose a video from a multi-file torrent; only the selected video's requested pieces and a bounded lookahead are prioritized.
 - Play through Media3, pause, seek into undownloaded sections, and choose available audio tracks through the player settings.
 - Display download progress, peers, buffering, and actionable input/network/storage errors.
