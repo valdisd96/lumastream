@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.1 — 2026-10-26 (pre-release)
+
+- Make enabled prefetch continue during playback and buffering as well as pause, within the existing disk-cache budget. Retain saved preferences, demand-read priority and session-only cleanup; stop speculative scheduling on player error or inactive playback.
+- Rename the setting to **Continuous prefetch** and explain cache-full/refill behavior. Debug build, JVM suite and lint passed; real ARM64 emulator playback showed 111.5 MiB ahead of the reader at 01:00 while still downloading at 3.4 MiB/s. No new physical-projector or full-cache runtime verification.
+
 ## 0.9.0 — 2026-10-26 (pre-release)
 
 - Make TMDB catalog and OpenSubtitles search optional and off on fresh installations; retain configured legacy integrations and preserve credentials when disabled. Disabled TMDB makes no metadata or artwork requests, including saved library cards.
