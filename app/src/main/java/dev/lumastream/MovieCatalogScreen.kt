@@ -1373,73 +1373,123 @@ private fun CatalogSourcesContent(
             }
         }
     }
-    // Identity remains outside the scrolling source list, including while requests fail.
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title, Modifier.width(54.dp).aspectRatio(2f / 3f))
-            Column(Modifier.weight(1f)) {
-                Text(title.title, color = Color.White, fontSize = 24.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(title.subtitle() + (episode?.let { " · S${it.season} E${it.number} · ${it.title}" } ?: ""), color = CatalogAccent)
-            }
-        }
-        Text("Torrent sources · Availability is not verified. Only open content you are authorized to share. BitTorrent may upload and exposes your IP to peers.", color = CatalogMuted, fontSize = 13.sp)
-        Text("Codec support is unverified until media is read. Seed counts are provider reports, not a guarantee of availability.", color = CatalogMuted, fontSize = 13.sp)
-        CatalogStatus(state, retry)
-        state.providerStatuses.forEach { status ->
-            val message = when (status.state) {
-                SourceProviderState.LOADING -> "Searching…"
-                SourceProviderState.SUCCESS -> "${status.sourceCount} source(s)${if (status.cached) " · cached" else ""}"
-                SourceProviderState.ERROR -> status.error ?: "Unavailable. Try again."
-            }
-            Text("${status.label}: $message",
-                color = if (status.state == SourceProviderState.ERROR) Color(0xFFFFB4AB) else CatalogMuted,
-                fontSize = 13.sp)
-        }
-        if (!state.loading && state.providerStatuses.any { it.state == SourceProviderState.ERROR } &&
-            state.sources?.sources?.isNotEmpty() == true) {
-            CatalogButton("Retry unavailable providers", onClick = retry)
-        }
-        val page = state.sources
-        if (page != null && page.sources.isEmpty() && !state.loading) {
-            CatalogReadable(if (page.unsupportedCount > 0) {
-                "Providers returned ${page.unsupportedCount} unsupported stream(s), but no supported torrent sources for this selection."
-            } else {
-                "No torrent sources are available from the completed requests. Check provider statuses above."
-            })
-            CatalogButton("Refresh sources", onClick = retry)
-        }
-        if (page != null && page.sources.isNotEmpty()) {
-            if (page.unsupportedCount > 0) Text("${page.unsupportedCount} unsupported stream(s) omitted.", color = CatalogMuted, fontSize = 13.sp)
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (automaticGroups.isNotEmpty()) {
-                    item {
-                        CatalogButton("Watch automatically…", Modifier.fillMaxWidth()) {
-                            automaticOptions = automaticGroups
-                        }
-                    }
-                } else {
-                    item {
-                        CatalogReadable("Automatic selection has no candidates without compatibility warnings. You can still choose a source manually.")
+    // Give sources the full remaining height; provider notices must not squeeze the list.
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+        LazyColumn(
+            Modifier.weight(0.34f),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+        ) {
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
+                        Modifier.width(52.dp).aspectRatio(2f / 3f))
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(title.title, color = Color.White, fontSize = 22.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        Text(title.subtitle(), color = CatalogAccent, fontSize = 13.sp)
                     }
                 }
-                items(page.sources, key = { "${it.infoHash}:${it.fileIndex}:${it.filename}" }) { source ->
+            }
+            episode?.let {
+                item { CatalogReadable("S${it.season} · E${it.number}\n${it.title}") }
+            }
+            item { Text("PROVIDERS", color = CatalogAccent, fontSize = 12.sp, letterSpacing = 1.sp) }
+            item { CatalogStatus(state, retry) }
+            items(state.providerStatuses) { status ->
+                var focused by remember { mutableStateOf(false) }
+                val message = when (status.state) {
+                    SourceProviderState.LOADING -> "Searching…"
+                    SourceProviderState.SUCCESS -> "${status.sourceCount} sources${if (status.cached) " · cached" else ""}"
+                    SourceProviderState.ERROR -> status.error ?: "Unavailable. Try again."
+                }
+                Column(
+                    Modifier.fillMaxWidth()
+                        .border(1.dp, if (focused) CatalogAccent else Color.Transparent, RoundedCornerShape(10.dp))
+                        .background(if (focused) Color(0xFF293D58) else Color(0xFF1C2330), RoundedCornerShape(10.dp))
+                        .onFocusChanged { focused = it.isFocused }.focusable().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(status.label, color = Color.White, fontSize = 14.sp)
+                    Text(message, color = if (status.state == SourceProviderState.ERROR) Color(0xFFFFB4AB) else CatalogMuted,
+                        fontSize = 13.sp)
+                }
+            }
+            if (!state.loading && state.providerStatuses.any { it.state == SourceProviderState.ERROR } &&
+                sources.isNotEmpty()) {
+                item { CatalogButton("Retry unavailable providers", onClick = retry) }
+            }
+            item {
+                CatalogReadable("Only open content you are authorized to share. BitTorrent may upload and exposes your IP to peers.")
+            }
+            item {
+                CatalogReadable("Availability and codec support are unverified. Quality, languages and seed counts are provider reports.")
+            }
+        }
+        Column(Modifier.weight(0.66f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Choose a source", color = Color.White, fontSize = 22.sp)
+                Text("${sources.size} sources", color = CatalogMuted, fontSize = 13.sp)
+            }
+            LazyColumn(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(10.dp),
+            ) {
+                val page = state.sources
+                if (page != null && sources.isEmpty() && !state.loading) {
+                    item {
+                        CatalogReadable(if (page.unsupportedCount > 0) {
+                            "Providers returned ${page.unsupportedCount} unsupported streams, but no supported torrent sources."
+                        } else {
+                            "No torrent sources are available. Check provider statuses."
+                        })
+                    }
+                    item { CatalogButton("Refresh sources", onClick = retry) }
+                }
+                if (sources.isNotEmpty()) {
+                    if (automaticGroups.isNotEmpty()) {
+                        item {
+                            CatalogButton("Watch automatically…", Modifier.fillMaxWidth()) {
+                                automaticOptions = automaticGroups
+                            }
+                        }
+                    } else {
+                        item { CatalogReadable("No automatic candidates without compatibility warnings. Choose a source manually.") }
+                    }
+                    if (page != null && page.unsupportedCount > 0) {
+                        item { Text("${page.unsupportedCount} unsupported streams omitted.", color = CatalogMuted, fontSize = 13.sp) }
+                    }
+                }
+                items(sources, key = { "${it.infoHash}:${it.fileIndex}:${it.filename}" }) { source ->
                     val warnings = remember(source, compatibility) { compatibility.warnings(source) }
+                    val label = remember(source.displayName, source.provider) {
+                        source.displayName.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }
+                            .joinToString(" · ").ifBlank { source.provider }
+                    }
                     CatalogTile(Modifier.fillMaxWidth(), onClick = { select(source) }) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            Text(source.displayName.ifBlank { source.provider }, color = Color.White, fontSize = 18.sp)
-                            Text(source.provider, color = CatalogAccent)
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text(source.provider, Modifier.weight(1f), color = CatalogAccent,
+                                    fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(source.quality?.takeIf { it.isNotBlank() } ?: "Unknown quality",
+                                    color = Color.White, fontSize = 14.sp)
+                            }
+                            Text(label, color = Color.White, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            source.filename?.let {
+                                Text(it, color = CatalogMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                             val metadata = buildList {
-                                source.quality?.takeIf { it.isNotBlank() }?.let(::add)
                                 if (source.languages.isNotEmpty()) add(source.languages.joinToString(", "))
                                 source.sizeBytes?.let { add(formatSourceSize(it)) }
-                                source.seeders?.let { add("$it seeders (provider report)") }
+                                source.seeders?.let { add("$it seeders · reported") }
                             }
-                            if (metadata.isNotEmpty()) Text(metadata.joinToString(" · "), color = CatalogMuted)
-                            source.filename?.let { Text(it, color = CatalogMuted, fontSize = 13.sp) }
+                            if (metadata.isNotEmpty()) Text(metadata.joinToString(" · "), color = CatalogMuted,
+                                fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             warnings.forEach { warning ->
-                                Text(warning, color = Color(0xFFFFB4AB), fontSize = 14.sp)
+                                Text(warning, color = Color(0xFFFFB4AB), fontSize = 13.sp)
                             }
-                            Text("Play", color = CatalogAccent, fontSize = 14.sp)
+                            Text("OK to play", color = CatalogAccent, fontSize = 12.sp)
                         }
                     }
                 }
