@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-10-26 (pre-release)
 
 - Reworked source selection into independently scrolling provider/context and source columns, so notices and provider failures no longer consume the source list's height.
 - Added a source-count heading, compact release labels and inset list padding for focused cards. Source quality, reported metadata, compatibility warnings and manual/automatic actions remain available.
-- Prepared a local signed 0.5.1 build (version code 7) and updated the projector in place with the existing release certificate; no GitHub release is published.
+- Prepared a signed ARMv7 preview (version code 7) using the existing release certificate for in-place updates preserving settings and history.
 - Verified the real Dexter S1E4 source list on WK03K: complete focused cards, source scrolling, independent provider/disclosure scrolling, manual position-transfer confirmation and automatic quality groups. Existing history and configured providers remained usable; no video was started or history edited. Debug/release builds and lint, APK signature and alignment checks passed.
+- Release build, all 147 JVM tests and release lint passed. The ARMv7 APK passed signature/alignment checks and a scan for the owner's private TMDB/OpenSubtitles credentials.
 
 ## 0.5.0 — 2026-10-19 (pre-release)
 
