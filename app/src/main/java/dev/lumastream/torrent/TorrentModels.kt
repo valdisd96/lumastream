@@ -17,6 +17,9 @@ data class TorrentState(
     val totalBytes: Long = 0,
     val cacheBytes: Long = 0,
     val cacheLimitBytes: Long = 0,
+    /** Contiguous verified bytes beyond the extractor's video read cursor, not playback time. */
+    val prefetchedBytes: Long = 0,
+    val pausePrefetchStatus: String? = null,
     val peers: Int = 0,
     /** Only the piece blocking a reader, never rolling-cache fullness. */
     val requiredPieceIndex: Int? = null,

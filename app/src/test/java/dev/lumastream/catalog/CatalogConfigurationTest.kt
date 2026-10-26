@@ -70,6 +70,64 @@ class CatalogConfigurationTest {
         }
     }
 
+    @Test fun prefetchMigrationPreservesAllExistingSettingsWithoutOptingIn() {
+        val legacy = """{
+            "token":"tmdb-private",
+            "providerManifestUrl":"https://example.org/provider-private/manifest.json",
+            "catalogLanguage":"uk-UA",
+            "subtitleLanguage":"de",
+            "audioLanguage":"ja",
+            "openSubtitlesApiKey":"subtitle-private",
+            "torrentsDbEnabled":true,
+            "mediaFusionEnabled":true
+        }"""
+        val expected = CatalogConfiguration(
+            token = "tmdb-private",
+            providerManifestUrl = "https://example.org/provider-private/manifest.json",
+            catalogLanguage = "uk-UA",
+            subtitleLanguage = "de",
+            audioLanguage = "ja",
+            openSubtitlesApiKey = "subtitle-private",
+            torrentsDbEnabled = true,
+            mediaFusionEnabled = true,
+            pausePrefetchEnabled = false,
+            torrentCacheGiB = 4,
+        )
+        val migrated = decodeCatalogConfiguration(legacy)
+        assertEquals(expected, migrated)
+        assertEquals(expected, decodeCatalogConfiguration(encodeCatalogConfiguration(migrated)))
+    }
+
+    @Test fun prefetchAndCacheSelectionsPersistAcrossCredentialAndProviderChanges() {
+        for (size in listOf(1, 2, 4, 8)) {
+            for (enabled in listOf(false, true)) {
+                val selected = CatalogConfiguration(pausePrefetchEnabled = enabled, torrentCacheGiB = size)
+                val saved = decodeCatalogConfiguration(encodeCatalogConfiguration(selected.validated()))
+                assertEquals(selected, saved)
+                val changed = saved.copy(token = "new-token", torrentsDbEnabled = true).validated()
+                val reloaded = decodeCatalogConfiguration(encodeCatalogConfiguration(changed))
+                assertEquals(enabled, reloaded.pausePrefetchEnabled)
+                assertEquals(size, reloaded.torrentCacheGiB)
+                assertEquals("new-token", reloaded.token)
+                assertEquals(true, reloaded.torrentsDbEnabled)
+            }
+        }
+    }
+
+    @Test fun invalidCacheSizesAreRejectedRatherThanRoundedOrReplacedByDefaults() {
+        for (size in listOf(Int.MIN_VALUE, -1, 0, 3, 5, 16, Int.MAX_VALUE)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                CatalogConfiguration(torrentCacheGiB = size).validated()
+            }
+        }
+        for (value in listOf("0", "3", "-1", "4.5", "4294967300", "\"4\"", "\"private-secret\"", "null", "true")) {
+            val failure = assertThrows(IllegalArgumentException::class.java) {
+                decodeCatalogConfiguration("""{"token":"private-token","torrentCacheGiB":$value}""")
+            }
+            assertFalse(failure.message.orEmpty().contains("private"))
+        }
+    }
+
     @Test fun invalidPreferencesAndKeysAreRejectedWithoutEchoingCredentials() {
         assertThrows(IllegalArgumentException::class.java) { CatalogConfiguration(subtitleLanguage = "any").validated() }
         assertThrows(IllegalArgumentException::class.java) { CatalogConfiguration(audioLanguage = "auto").validated() }
