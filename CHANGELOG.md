@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Refresh the English README with a user-friendly introduction, setup guidance and an attributed screenshot gallery; separate detailed engineering and verification records into the maintainer guide.
+- Add reader-focused 0.8.0 release notes and concise conventions for future release descriptions. This is a documentation-only refresh; published APKs, checksums and signing are unchanged.
+
 ## 0.8.0 — 2026-10-26 (pre-release)
 
 - Add one adaptive UI for Android TV, phones and tablets: touch controls, ordinary launcher entry, portrait/landscape rotation, resizable layouts and system-bar/keyboard insets. Keep Android 9 / API 28 as the minimum and TV remote controls intact.
