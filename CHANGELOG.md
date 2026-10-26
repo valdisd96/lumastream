@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8.0 — Unreleased
+## 0.8.0 — 2026-10-26 (pre-release)
 
 - Add one adaptive UI for Android TV, phones and tablets: touch controls, ordinary launcher entry, portrait/landscape rotation, resizable layouts and system-bar/keyboard insets. Keep Android 9 / API 28 as the minimum and TV remote controls intact.
 - Adapt catalog search, discovery, Watch later, History, details, episode/source selection, Settings, Archive and file selection to touch and narrow windows. Keep long content scrollable and preserve result viewport state.
@@ -8,7 +8,7 @@
 - Bundle ARMv7, ARM64, x86 and x86-64 in one APK; validate ELF class/machine for every packaged native library and 16 KB alignment for both 64-bit ABIs. Set version code 10.
 - Correct TV focused-row scaling and initial result visibility while retaining saved viewport restoration.
 - Debug/release builds, all 158 release JVM tests, release lint and native packaging checks passed. Real ARM64 phone playback on 16 KB pages exercised rotation, touch menus, seeking and normal shutdown/cache cleanup; narrow large-text and keyboard layouts were inspected. TV emulator checks covered D-pad focus and result restoration.
-- Verify the locally signed APK upgrading signed 0.7.0 on an isolated tablet: retained app identity and saved pause-prefetch preference, real first frame before full download, advancing video and normal native shutdown. No new physical-device, x86 runtime or audible-output claim; the public release is unchanged.
+- Verify the signed APK upgrading signed 0.7.0 on an isolated tablet: retained app identity and saved pause-prefetch preference, real first frame before full download, advancing video and normal native shutdown. No new physical-phone/tablet, x86 runtime or audible-output claim.
 
 ## 0.7.0 — 2026-10-26 (pre-release)
 

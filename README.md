@@ -4,15 +4,15 @@ An Android application for TVs, phones and tablets that plays torrents before th
 
 ## Download
 
-The latest signed preview is [v0.7.0](https://github.com/valdisd96/lumastream/releases/tag/v0.7.0). Download `lumastream-0.7.0-universal.apk` and `SHA256SUMS` from its assets. One APK supports ARMv7 and ARM64 Android TV / Google TV devices on Android 9 / API 28 or later, including ARM64 systems with 16 KB memory pages. x86 devices and emulators are not supported. GitHub Packages is not used.
+The latest signed preview is [v0.8.0](https://github.com/valdisd96/lumastream/releases/tag/v0.8.0). Download `lumastream-0.8.0-universal.apk` and `SHA256SUMS` from its assets. One APK supports Android TV / Google TV, phones and tablets on Android 9 / API 28 or later, with ARMv7, ARM64, x86 and x86-64 native libraries and 16 KB-compatible 64-bit libraries. GitHub Packages is not used.
 
-Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.7.0-universal.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.8.0-universal.apk`, or transfer it to the device and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
 
 The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
 
-Version 0.7.0 has `versionCode=9` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. This update adds universal ARM support, 16 KB native compatibility, and a fix for Settings dialog focus restoration.
+Version 0.8.0 has `versionCode=10` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. An in-place signed 0.7.0-to-0.8.0 update retained the saved pause-prefetch setting on an isolated tablet emulator.
 
-The published 0.7.0 preview is TV-only. Development version **0.8.0** (`versionCode=10`) adds adaptive phone/tablet touch layouts and bundles **ARMv7, ARM64, x86 and x86-64** in one APK, retaining Android 9 / API 28 as the minimum. ARMv7 playback was previously verified on WK03K; current mobile and TV regression checks use ARM64 emulators. Codec and filesystem support still depend on the device.
+This preview adds adaptive phone/tablet touch layouts while retaining TV remote controls. Mobile and TV regression checks use ARM64 emulators; x86 runtime and physical phone/tablet playback have not been verified. Codec and filesystem support still depend on the device.
 
 ## Current functionality
 
@@ -175,7 +175,7 @@ The ARM64 check exposed a Settings crash when closing a cache-size dialog after 
 
 The certificate and version-code checks support in-place signed-release updates; the isolated reinstall is not an older-release migration test. No new audible-output claim is made, and decoder/network/filesystem limitations still apply.
 
-### Adaptive Android verification (0.8.0 development)
+### Adaptive Android verification (0.8.0)
 
 Debug/release builds, all **158 release JVM tests**, release lint and the four-ABI packaging check passed. A deliberately mismatched x86-64 ELF machine was rejected by the checker. The locally signed APK uses the existing release certificate and contains no copy of the owner's private TMDB token.
 
@@ -185,7 +185,7 @@ The final signed APK was installed over signed **0.7.0** on an isolated ARM64 ta
 
 On the ARM64 Google TV emulator, D-pad search, focused result visibility, full-width settings focus and result viewport restoration after visiting details were checked. Focused buttons no longer scale outside their row, and initial result focus is distinct from restoring a saved viewport.
 
-These are emulator checks, not physical phone/tablet, x86 runtime, foldable, hardware decoder or audible-output certification. The projector and its installed app were not changed for this work. The public release remains 0.7.0 until a new release is published.
+These are emulator checks, not physical phone/tablet, x86 runtime, foldable, hardware decoder or audible-output certification. The projector and its installed app were not changed during these development checks.
 
 ## Use on phones and tablets
 
