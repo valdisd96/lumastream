@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-10-26 (pre-release)
 
+- Prepared the signed ARMv7 preview with version code 8 and the existing release certificate for in-place upgrades.
+- Integrated release build, all 158 release JVM tests and release lint passed. The non-debuggable ARMv7 APK passed alignment/signature checks, matched the installed 0.5.1 certificate, and contained no copy of the owner's private TMDB token.
 - Group History into one card per movie or series, using the most recently played episode and its exact resume position rather than displaying every episode separately. Stored episode progress and the existing 100-record bound are unchanged.
 - Keep history focus keyed by movie/series identity when the representative episode changes. Exact-episode history actions and Choose episode remain available.
 - Verified grouped cards, latest-episode dialog, retained episode data and focus restoration in an isolated WK03K app with synthetic history. Debug build, lint and all 149 JVM tests passed; no playback was started and the installed release/data were unchanged.

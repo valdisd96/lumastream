@@ -4,13 +4,13 @@ An Android TV application for playing torrents before the download completes, in
 
 ## Download
 
-The latest signed preview is [v0.5.1](https://github.com/valdisd96/lumastream/releases/tag/v0.5.1). Download `lumastream-0.5.1-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
+The latest signed preview is [v0.6.0](https://github.com/valdisd96/lumastream/releases/tag/v0.6.0). Download `lumastream-0.6.0-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
 
-Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.5.1-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.6.0-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
 
 The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
 
-Version 0.5.1 has `versionCode=7` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. This update redesigns source selection with independent provider/context and source columns, compact cards and space for the focus outline.
+Version 0.6.0 has `versionCode=8` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. This update adds optional pause prefetch, configurable 1 / 2 / 4 / 8 GiB disk cache, and one history card per series while retaining individual episode resume points.
 
 ## Current functionality
 
@@ -131,19 +131,21 @@ With `JAVA_HOME` and `ANDROID_HOME` configured as above:
 ./gradlew assembleRelease testReleaseUnitTest lintRelease
 TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 SIGNING="$HOME/.config/lumastream/signing"
-OUT=".local/release-v0.5.1"
+OUT=".local/release-v0.6.0"
 mkdir -p "$OUT"
 "$TOOLS/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$OUT/aligned.apk"
 "$TOOLS/apksigner" sign \
   --ks "$SIGNING/release.p12" --ks-key-alias lumastream \
   --ks-pass "file:$SIGNING/store-password" \
-  --out "$OUT/lumastream-0.5.1-armeabi-v7a.apk" "$OUT/aligned.apk"
-"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.5.1-armeabi-v7a.apk"
-"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.5.1-armeabi-v7a.apk"
-(cd "$OUT" && shasum -a 256 lumastream-0.5.1-armeabi-v7a.apk > SHA256SUMS)
+  --out "$OUT/lumastream-0.6.0-armeabi-v7a.apk" "$OUT/aligned.apk"
+"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.6.0-armeabi-v7a.apk"
+"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.6.0-armeabi-v7a.apk"
+(cd "$OUT" && shasum -a 256 lumastream-0.6.0-armeabi-v7a.apk > SHA256SUMS)
 ```
 
 Release certificate SHA-256: `c113d8eb54f1eb4cdfe327612236e7dbd7cedce27ab9235a4f4938ad01e35f70`.
+
+For v0.6.0, `assembleRelease`, all **158 release unit tests** and `lintRelease` passed. The signed APK passed signature/alignment checks and matches the certificate of the installed 0.5.1 release. Its package is `dev.lumastream`, version code 8, non-debuggable and ARMv7-only; the owner's private TMDB token was absent from decompressed APK entries. Pause-prefetch and grouped-history device verification and its limits are recorded below.
 
 For v0.5.1, `assembleRelease`, all 147 release unit tests and `lintRelease` passed. The signed ARMv7 APK passed signature/alignment checks with the original release certificate and a scan for the owner's private TMDB/OpenSubtitles credentials. Source-layout device evidence is recorded above; this release does not claim renewed playback or audible-sound verification.
 
