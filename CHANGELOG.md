@@ -3,7 +3,8 @@
 ## 0.9.1 — 2026-10-26 (pre-release)
 
 - Make enabled prefetch continue during playback and buffering as well as pause, within the existing disk-cache budget. Retain saved preferences, demand-read priority and session-only cleanup; stop speculative scheduling on player error or inactive playback.
-- Rename the setting to **Continuous prefetch** and explain cache-full/refill behavior. Debug build, JVM suite and lint passed; real ARM64 emulator playback showed 111.5 MiB ahead of the reader at 01:00 while still downloading at 3.4 MiB/s. No new physical-projector or full-cache runtime verification.
+- Rename the setting to **Continuous prefetch** and explain cache-full/refill behavior. Debug/release builds, lint and all 162 release JVM tests passed; real ARM64 emulator playback showed 111.5 MiB ahead of the reader at 01:00 while still downloading at 3.4 MiB/s.
+- Publish the signed universal APK with version code 12; signature, four-ABI packaging, 16 KB alignment and private-credential scan passed. Install over 0.9.0 on WK03K without uninstalling: package UID/first-install time and enabled prefetch/4 GiB settings retained; installed APK matches the release SHA-256. Actual playing Sintel grew the forward reserve from 13.7 to 22.0 MiB, followed by pause/resume and normal native shutdown. Full-cache runtime and audible output were not reverified.
 
 ## 0.9.0 — 2026-10-26 (pre-release)
 
