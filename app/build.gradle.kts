@@ -13,9 +13,14 @@ android {
         applicationId = "dev.lumastream"
         minSdk = 28
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.6.0"
-        ndk { abiFilters += "armeabi-v7a" }
+        versionCode = 9
+        versionName = "0.7.0"
+        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+            }
+        }
     }
 
     externalNativeBuild {
@@ -49,6 +54,7 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.5.1")
     implementation("org.libtorrent4j:libtorrent4j:2.1.0-39")
     implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-39")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-39")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

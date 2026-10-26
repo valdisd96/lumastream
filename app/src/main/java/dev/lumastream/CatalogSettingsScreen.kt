@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -71,6 +72,9 @@ fun CatalogSettingsScreen(
     val audioLanguageFocus = remember { FocusRequester() }
     val subtitleKeyFocus = remember { FocusRequester() }
     val cacheSizeFocus = remember { FocusRequester() }
+    val settingsScroll = rememberLazyListState()
+    var dialogItemIndex by remember { mutableStateOf(0) }
+    var restoreDialogFocus by remember { mutableStateOf<FocusRequester?>(null) }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val buttonColors = ButtonDefaults.colors(
@@ -81,6 +85,18 @@ fun CatalogSettingsScreen(
         keyboard?.hide()
         focus.clearFocus(force = true)
         editing = false
+    }
+    fun prepareDialog(itemIndex: Int) {
+        dialogItemIndex = itemIndex
+        dismissInput()
+    }
+    LaunchedEffect(restoreDialogFocus) {
+        val requester = restoreDialogFocus ?: return@LaunchedEffect
+        // Clearing focus can dispose the opener in the lazy list while the dialog is open.
+        settingsScroll.scrollToItem(dialogItemIndex)
+        withFrameNanos { }
+        requester.requestFocus()
+        restoreDialogFocus = null
     }
     BackHandler {
         if (editing) { dismissInput(); backFocus.requestFocus() } else onBack()
@@ -108,7 +124,7 @@ fun CatalogSettingsScreen(
                 else -> languageFocus
             }
             choosingLanguage = null
-            requester.requestFocus()
+            restoreDialogFocus = requester
         }
         Dialog(onDismissRequest = { closeLanguages() }) {
             Column(
@@ -152,7 +168,7 @@ fun CatalogSettingsScreen(
         val selectedFocus = remember { FocusRequester() }
         fun closeCacheSizes() {
             choosingCacheSize = false
-            cacheSizeFocus.requestFocus()
+            restoreDialogFocus = cacheSizeFocus
         }
         Dialog(onDismissRequest = { closeCacheSizes() }) {
             Column(
@@ -180,6 +196,7 @@ fun CatalogSettingsScreen(
         }
     }
     LazyColumn(
+        state = settingsScroll,
         modifier = Modifier.fillMaxSize().background(Color(0xFF10131B)).padding(36.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -237,7 +254,7 @@ fun CatalogSettingsScreen(
             Button(
                 colors = buttonColors,
                 enabled = !saving,
-                onClick = { dismissInput(); choosingCacheSize = true },
+                onClick = { prepareDialog(itemIndex = 8); choosingCacheSize = true },
                 modifier = Modifier.fillMaxWidth().focusRequester(cacheSizeFocus),
             ) {
                 Text("Torrent disk cache: $torrentCacheGiB GiB", color = Color.White)
@@ -252,7 +269,7 @@ fun CatalogSettingsScreen(
         item {
             Button(
                 colors = buttonColors,
-                onClick = { dismissInput(); choosingLanguage = "Catalog" },
+                onClick = { prepareDialog(itemIndex = 11); choosingLanguage = "Catalog" },
                 modifier = Modifier.focusRequester(languageFocus),
             ) {
                 val language = SUPPORTED_CATALOG_LANGUAGES.first { it.code == catalogLanguage }
@@ -265,7 +282,7 @@ fun CatalogSettingsScreen(
         item {
             Button(
                 colors = buttonColors,
-                onClick = { dismissInput(); choosingLanguage = "Subtitles" },
+                onClick = { prepareDialog(itemIndex = 13); choosingLanguage = "Subtitles" },
                 modifier = Modifier.focusRequester(subtitleLanguageFocus),
             ) {
                 Text("Subtitle language: ${SUPPORTED_SUBTITLE_LANGUAGES.first { it.code == subtitleLanguage }.label} only", color = Color.White)
@@ -274,7 +291,7 @@ fun CatalogSettingsScreen(
         item {
             Button(
                 colors = buttonColors,
-                onClick = { dismissInput(); choosingLanguage = "Audio" },
+                onClick = { prepareDialog(itemIndex = 14); choosingLanguage = "Audio" },
                 modifier = Modifier.focusRequester(audioLanguageFocus),
             ) {
                 Text("Audio preference: ${SUPPORTED_AUDIO_LANGUAGES.first { it.code == audioLanguage }.label}", color = Color.White)

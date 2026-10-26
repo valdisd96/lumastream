@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 — Unreleased
+
+- Build a single universal Android TV / Google TV APK with ARMv7 and ARM64 native libraries, retaining Android 9 / API 28 as the minimum. Phone/tablet UI and x86 are not included.
+- Enable NDK flexible-page-size support for the storage JNI library; retain unmodified libtorrent4j 2.1.0-39 binaries for both ABIs.
+- Add a CI packaging gate for the exact ABI set, required torrent/storage libraries, every ARM64 ELF LOAD segment's 16 KB alignment, and 16 KB APK ZIP alignment.
+- Bump version code to 9 and prepare a locally signed universal APK using the existing release certificate. Debug/release builds, all 158 release unit tests, release lint, signature verification and native packaging checks passed.
+- Verified isolated ARMv7 playback on WK03K: first frame before full download, visible advancing video, pause prefetch, missing-piece seek recovery, retained settings on reinstall, and normal native shutdown/cache cleanup. The installed release and its data were untouched.
+- Fix cache-size and language-dialog focus restoration when the Settings lazy list has disposed the opener: restore its list item before requesting focus, rather than crashing on dialog dismissal.
+
 ## 0.6.0 — 2026-10-26 (pre-release)
 
 - Prepared the signed ARMv7 preview with version code 8 and the existing release certificate for in-place upgrades.
