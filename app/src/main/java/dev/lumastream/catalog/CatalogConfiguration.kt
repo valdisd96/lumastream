@@ -54,7 +54,12 @@ data class CatalogConfiguration(
     val mediaFusionEnabled: Boolean = false,
     val pausePrefetchEnabled: Boolean = false,
     val torrentCacheGiB: Int = DEFAULT_TORRENT_CACHE_GIB,
+    val catalogEnabled: Boolean = false,
+    val onlineSubtitlesEnabled: Boolean = false,
 ) {
+    val isCatalogConfigured: Boolean get() = catalogEnabled && token.isNotBlank()
+    val isOnlineSubtitlesConfigured: Boolean get() = onlineSubtitlesEnabled && openSubtitlesApiKey.isNotBlank()
+
     override fun toString(): String = "CatalogConfiguration(token=<redacted>, provider=<redacted>, openSubtitlesApiKey=<redacted>)"
 
     fun validated(): CatalogConfiguration {
@@ -67,10 +72,16 @@ data class CatalogConfiguration(
         require(SUPPORTED_SUBTITLE_LANGUAGES.any { it.code == subtitleLanguage }) { "Select a supported subtitle language." }
         require(SUPPORTED_AUDIO_LANGUAGES.any { it.code == audioLanguage }) { "Select a supported audio preference." }
         val cleanSubtitleKey = openSubtitlesApiKey.trim()
+        require(!onlineSubtitlesEnabled || cleanSubtitleKey.isNotBlank()) {
+            "Enter the OpenSubtitles application consumer key supplied by your app provider, or set Online subtitles to Off."
+        }
         require(cleanSubtitleKey.length <= 512 && cleanSubtitleKey.all { it in '!'..'~' }) {
             "Enter an OpenSubtitles consumer API key without spaces, or leave it empty to remove it."
         }
         val cleanToken = token.trim()
+        require(!catalogEnabled || cleanToken.isNotBlank()) {
+            "Enter your TMDB API Read Access Token, or set Catalog to Off."
+        }
         require(cleanToken.length <= 4096 && cleanToken.none { it.isWhitespace() || it.isISOControl() }) {
             "Enter a TMDB API Read Access Token without spaces, or leave it empty to remove it."
         }
@@ -136,13 +147,19 @@ internal fun decodeCatalogConfiguration(text: String): CatalogConfiguration {
     } else {
         DEFAULT_TORRENT_CACHE_GIB
     }
+    val token = json.optString("token")
+    val subtitleKey = json.optString("openSubtitlesApiKey")
     return CatalogConfiguration(
-        token = json.optString("token"),
+        token = token,
         providerManifestUrl = json.optString("providerManifestUrl", DEFAULT_PROVIDER),
         catalogLanguage = json.optString("catalogLanguage", DEFAULT_CATALOG_LANGUAGE),
         subtitleLanguage = json.optString("subtitleLanguage", DEFAULT_SUBTITLE_LANGUAGE),
         audioLanguage = json.optString("audioLanguage", ORIGINAL_AUDIO_LANGUAGE),
-        openSubtitlesApiKey = json.optString("openSubtitlesApiKey"),
+        openSubtitlesApiKey = subtitleKey,
+        catalogEnabled = if (json.has("catalogEnabled")) json.getBoolean("catalogEnabled") else token.isNotBlank(),
+        onlineSubtitlesEnabled = if (json.has("onlineSubtitlesEnabled")) {
+            json.getBoolean("onlineSubtitlesEnabled")
+        } else subtitleKey.isNotBlank(),
         torrentsDbEnabled = json.optBoolean("torrentsDbEnabled", false),
         mediaFusionEnabled = json.optBoolean("mediaFusionEnabled", false),
         pausePrefetchEnabled = json.optBoolean("pausePrefetchEnabled", false),
@@ -152,6 +169,8 @@ internal fun decodeCatalogConfiguration(text: String): CatalogConfiguration {
 
 internal fun encodeCatalogConfiguration(configuration: CatalogConfiguration): String = JSONObject()
     .put("token", configuration.token)
+    .put("catalogEnabled", configuration.catalogEnabled)
+    .put("onlineSubtitlesEnabled", configuration.onlineSubtitlesEnabled)
     .put("providerManifestUrl", configuration.providerManifestUrl)
     .put("catalogLanguage", configuration.catalogLanguage)
     .put("subtitleLanguage", configuration.subtitleLanguage)

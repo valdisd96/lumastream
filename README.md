@@ -68,6 +68,8 @@ Replace `DEVICE` with the device identifier shown by `adb devices`. Developers c
 
 </details>
 
+**Development branch:** the next version adds a credential-free Home with **Open magnet / torrent** and explicit, default-off TMDB and online-subtitle integrations. Existing configured installations retain their enabled services. This is not yet included in the v0.8.0 APK linked above; its setup instructions below remain applicable.
+
 ### 2. Set up the catalog
 
 1. Create or sign in to your [TMDB account](https://www.themoviedb.org/), then open its [API settings](https://www.themoviedb.org/settings/api) to request API access.

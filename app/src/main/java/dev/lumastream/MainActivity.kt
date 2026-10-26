@@ -177,10 +177,12 @@ class MainActivity : ComponentActivity() {
         finishPlayerMenu()
         val tracks = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
             .flatMap { group -> (0 until group.length).filter { group.isTrackSupported(it) }.map { group to it } }
+        val onlineEnabled = model.screen.value.configuration.isOnlineSubtitlesConfigured
         val labels = listOf("Off", "Choose external SRT / VTT…", "Load HTTPS subtitle URL…",
             "Subtitle timing (${subtitleDelayLabel(model.screen.value.subtitleDelayMs)})…",
-            "Subtitles in this torrent (${model.torrentSubtitles().size})…",
-            "Find subtitles online (${model.screen.value.configuration.subtitleLanguage})…") + tracks.map { (group, index) ->
+            "Subtitles in this torrent (${model.torrentSubtitles().size})…") +
+            (if (onlineEnabled) listOf("Find subtitles online (${model.screen.value.configuration.subtitleLanguage})…") else emptyList()) +
+            tracks.map { (group, index) ->
             val format = group.getTrackFormat(index)
             val name = format.label ?: format.language ?: "Subtitle ${index + 1}"
             if (group.isTrackSelected(index)) "$name (selected)" else name
@@ -211,9 +213,10 @@ class MainActivity : ComponentActivity() {
                 }
                 3 -> showSubtitleTiming()
                 4 -> showTorrentSubtitles()
-                5 -> showOnlineSubtitles()
-                else -> {
-                    val (group, index) = tracks[choice - 6]
+                else -> if (onlineEnabled && choice == 5) {
+                    showOnlineSubtitles()
+                } else {
+                    val (group, index) = tracks[choice - if (onlineEnabled) 6 else 5]
                     model.selectSubtitle(group, index)
                 }
             }
@@ -224,7 +227,7 @@ class MainActivity : ComponentActivity() {
         val candidates = model.torrentSubtitles()
         if (candidates.isEmpty()) {
             AlertDialog.Builder(this).setTitle("Torrent subtitles")
-                .setMessage("No matching SRT / WebVTT files were found for this video. Try Find subtitles online.")
+                .setMessage("No matching SRT / WebVTT files were found for this video. You can import an external subtitle file or HTTPS URL.")
                 .setPositiveButton("OK", null).setOnDismissListener { finishPlayerMenu() }.show()
             return
         }
@@ -260,6 +263,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showOnlineSubtitles() {
+        if (!model.screen.value.configuration.isOnlineSubtitlesConfigured) return
         val player = model.screen.value.player ?: return
         subtitleSearch?.cancel()
         val progress = onlineSubtitleDialog("Find subtitles")
@@ -476,7 +480,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class AppPage { CATALOG, ARCHIVE, SETTINGS, PLAYER }
+enum class AppPage { CATALOG, OPEN_TORRENT, ARCHIVE, SETTINGS, PLAYER }
 
 data class PlaybackScreenState(
     val page: AppPage = AppPage.CATALOG,
@@ -1109,6 +1113,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                 configuration = screen.configuration,
                 onConfigure = { model.navigate(AppPage.SETTINGS) },
                 onArchive = { model.navigate(AppPage.ARCHIVE) },
+                onOpenTorrent = { model.navigate(AppPage.OPEN_TORRENT) },
                 onBack = onExit,
                 onOpenSource = model::requestCatalog,
                 onAutoSources = model::requestAutomaticSources,
@@ -1159,6 +1164,10 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                     }
                 }
             }
+            return
+        }
+        AppPage.OPEN_TORRENT -> {
+            OpenTorrentScreen(onOpen = model::open, onBack = { model.navigate(AppPage.CATALOG) })
             return
         }
         AppPage.ARCHIVE -> {
@@ -1240,7 +1249,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                 RemoteButton(when {
                     recovery -> "Choose another source"
                     nextEpisode -> "Next episode"
-                    else -> "Back to search"
+                    else -> "Back to Home"
                 }, modifier = Modifier.focusRequester(backFocus),
                     enabled = !(recovery || nextEpisode) || !screen.busy,
                     onClick = when {
@@ -1271,7 +1280,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                     Text(it, color = Color(0xFFFFA6A6), fontSize = 16.sp)
                     Text(if (screen.recoveryEntry != null)
                         "Choose another source for the same title or episode. You can transfer the saved position or start over."
-                        else "Return to search and choose another source.",
+                        else "Return to Home and open another source.",
                         color = Color(0xFFBCC5D7), fontSize = 14.sp)
                 }
             }
