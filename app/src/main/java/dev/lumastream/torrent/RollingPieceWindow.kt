@@ -32,6 +32,8 @@ internal class RollingPieceWindow(
     private val admitted = BitSet(pieceCount)
     private var admittedCount = 0
 
+    private var reserveStart = -1
+    private var reserveEnd = -1
     val reservedBytes: Long get() = admittedCount.toLong() * pieceLength
 
     fun windowEnd(piece: Int, lastPiece: Int): Int {
@@ -52,12 +54,81 @@ internal class RollingPieceWindow(
         admittedCount += added
     }
 
+    /** Keep one uncommitted piece for a subtitle/hash read; never evict to extend prefetch. */
+    fun prefetchEnd(start: Int, lastPiece: Int, enabled: Boolean): Int {
+        requireInterval(start, lastPiece)
+        if (!enabled) return start - 1
+        var remaining = (capacityPieces - admittedCount - 1).coerceAtLeast(0)
+        val limit = windowEnd(start, lastPiece)
+        var end = start - 1
+        for (piece in start..limit) {
+            if (!admitted[piece]) {
+                if (remaining == 0L) break
+                remaining--
+            }
+            end = piece
+        }
+        return end
+    }
+
+    fun admitPrefetch(demand: Int, start: Int, end: Int) {
+        requireInterval(demand, start)
+        admit(start, end)
+        if (reserveStart < 0 || demand !in reserveStart..reserveEnd) {
+            reserveStart = demand
+            reserveEnd = end
+        } else {
+            reserveEnd = maxOf(reserveEnd, end)
+        }
+    }
+
+    /** A seek within the reserve can still consume it; an unrelated seek redirects it. */
+    fun redirectDemand(demand: Int) {
+        requireInterval(demand, demand)
+        if (demand !in reserveStart..reserveEnd) {
+            reserveStart = -1
+            reserveEnd = -1
+        }
+    }
+
     fun retainedStart(demand: Int, firstPiece: Int): Int {
         requireInterval(firstPiece, demand)
         return demand - minOf(demand - firstPiece, behindPieces)
     }
 
-    fun retainedEnd(demand: Int, lastPiece: Int): Int = windowEnd(demand, lastPiece)
+    fun retainedEnd(demand: Int, lastPiece: Int): Int {
+        val ordinaryEnd = windowEnd(demand, lastPiece)
+        return if (demand in reserveStart..reserveEnd) {
+            maxOf(ordinaryEnd, minOf(reserveEnd, lastPiece))
+        } else {
+            ordinaryEnd
+        }
+    }
+
+    /** Reclaim consumed lookbehind before sacrificing any still-useful forward reserve. */
+    fun retainedStartForAdmission(
+        demand: Int,
+        firstPiece: Int,
+        lastPiece: Int,
+        admissionStart: Int,
+        admissionEnd: Int,
+    ): Int {
+        requireInterval(admissionStart, admissionEnd)
+        var start = retainedStart(demand, firstPiece)
+        val end = retainedEnd(demand, lastPiece)
+        var count = admissionEnd.toLong() - admissionStart + 1
+        var piece = admitted.nextSetBit(start)
+        while (piece >= 0 && piece <= end) {
+            if (piece !in admissionStart..admissionEnd) count++
+            piece = admitted.nextSetBit(piece + 1)
+        }
+        while (count > capacityPieces && start < demand) {
+            if (admitted[start] && start !in admissionStart..admissionEnd) count--
+            start++
+        }
+        check(count <= capacityPieces) { "Forward reserve leaves no room for required data" }
+        return start
+    }
 
     /** Call only after native writes stop and bytes outside this interval have been removed. */
     fun reset(retainStart: Int, retainEnd: Int) {
@@ -65,6 +136,14 @@ internal class RollingPieceWindow(
         admitted.clear(0, retainStart)
         admitted.clear(retainEnd + 1, pieceCount)
         admittedCount = admitted.cardinality()
+        if (reserveStart >= 0) {
+            reserveStart = maxOf(reserveStart, retainStart)
+            reserveEnd = minOf(reserveEnd, retainEnd)
+            if (reserveStart > reserveEnd) {
+                reserveStart = -1
+                reserveEnd = -1
+            }
+        }
     }
 
     private fun newPieceCount(start: Int, end: Int): Int {
@@ -83,6 +162,63 @@ internal class RollingPieceWindow(
 
     private fun roundedPieces(bytes: Long): Long =
         bytes / pieceLength + if (bytes % pieceLength == 0L) 0 else 1
+}
+
+/** Resident verified data, distinct from cumulative downloaded bytes and playback time. */
+internal class VerifiedReaderAhead(
+    private val fileOffset: Long,
+    private val fileSize: Long,
+    private val pieceLength: Int,
+) {
+    private val firstPiece = (fileOffset / pieceLength).toInt()
+    private val lastPiece = ((fileOffset + fileSize - 1) / pieceLength).toInt()
+    private val verified = BitSet(lastPiece - firstPiece + 1)
+    private var readerPosition = -1L
+    private var contiguousEnd = firstPiece
+
+    // This small independent lock never calls native code or the NativeTorrent lock:
+    // the alert thread may record a finished piece while native shutdown is joining it.
+    @Synchronized fun record(piece: Int) {
+        if (piece !in firstPiece..lastPiece) return
+        verified.set(piece - firstPiece)
+        if (readerPosition >= 0 && piece == contiguousEnd) {
+            contiguousEnd = firstMissing(piece)
+        }
+    }
+
+    @Synchronized fun moveReader(position: Long) {
+        require(position in 0..fileSize) { "Reader cursor is outside the selected video" }
+        val piece = ((fileOffset + position) / pieceLength).toInt()
+        val previousPiece = if (readerPosition < 0) -1 else ((fileOffset + readerPosition) / pieceLength).toInt()
+        if (readerPosition < 0 || piece < previousPiece || piece >= contiguousEnd) {
+            contiguousEnd = firstMissing(piece)
+        }
+        readerPosition = position
+    }
+
+    @Synchronized fun firstMissing(piece: Int): Int {
+        if (piece > lastPiece) return piece
+        require(piece >= firstPiece)
+        return firstPiece + verified.nextClearBit(piece - firstPiece)
+    }
+
+    @Synchronized fun bytesAhead(): Long {
+        if (readerPosition < 0) return 0
+        val end = minOf(fileOffset + fileSize, contiguousEnd.toLong() * pieceLength)
+        return (end - fileOffset - readerPosition).coerceAtLeast(0)
+    }
+
+    @Synchronized fun reachesEnd(): Boolean = readerPosition >= 0 && contiguousEnd > lastPiece
+
+    @Synchronized fun retain(start: Int, end: Int) {
+        val from = (start - firstPiece).coerceIn(0, lastPiece - firstPiece + 1)
+        val until = (end.toLong() - firstPiece + 1).coerceIn(0, (lastPiece - firstPiece + 1).toLong()).toInt()
+        verified.clear(0, from)
+        verified.clear(until, lastPiece - firstPiece + 1)
+        if (readerPosition >= 0) {
+            contiguousEnd = firstMissing(((fileOffset + readerPosition) / pieceLength).toInt())
+        }
+    }
 }
 
 /** Maps a global half-open keep interval into an inclusive, file-local byte range. */
