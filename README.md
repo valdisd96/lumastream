@@ -1,18 +1,18 @@
 # LumaStream
 
-An Android TV application for playing torrents before the download completes, in a single APK with an embedded libtorrent engine and no mandatory external server.
+An Android application for TVs, phones and tablets that plays torrents before the download completes, in a single APK with an embedded libtorrent engine and no mandatory external server.
 
 ## Download
 
-The latest signed preview is [v0.7.0](https://github.com/valdisd96/lumastream/releases/tag/v0.7.0). Download `lumastream-0.7.0-universal.apk` and `SHA256SUMS` from its assets. One APK supports ARMv7 and ARM64 Android TV / Google TV devices on Android 9 / API 28 or later, including ARM64 systems with 16 KB memory pages. x86 devices and emulators are not supported. GitHub Packages is not used.
+The latest signed preview is [v0.8.0](https://github.com/valdisd96/lumastream/releases/tag/v0.8.0). Download `lumastream-0.8.0-universal.apk` and `SHA256SUMS` from its assets. One APK supports Android TV / Google TV, phones and tablets on Android 9 / API 28 or later, with ARMv7, ARM64, x86 and x86-64 native libraries and 16 KB-compatible 64-bit libraries. GitHub Packages is not used.
 
-Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.7.0-universal.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.8.0-universal.apk`, or transfer it to the device and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
 
 The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
 
-Version 0.7.0 has `versionCode=9` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. This update adds universal ARM support, 16 KB native compatibility, and a fix for Settings dialog focus restoration.
+Version 0.8.0 has `versionCode=10` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. An in-place signed 0.7.0-to-0.8.0 update retained the saved pause-prefetch setting on an isolated tablet emulator.
 
-This is TV support, not a touch/portrait phone or tablet interface. ARMv7 playback was verified on WK03K; ARM64 playback was verified on a Google TV Android 16 emulator with actual 16 KB pages, not on a physical ARM64 TV. Codec and filesystem support still depend on the device.
+This preview adds adaptive phone/tablet touch layouts while retaining TV remote controls. Mobile and TV regression checks use ARM64 emulators; x86 runtime and physical phone/tablet playback have not been verified. Codec and filesystem support still depend on the device.
 
 ## Current functionality
 
@@ -89,13 +89,13 @@ After the tracker correction, the previously timing-out Sintel 720p source was o
 
 Verified on XGIMI MoGo 4 Laser (WK03K), Android TV 11 / API 30, `armeabi-v7a`, with approximately 1.65 GiB of RAM visible to the OS. The primary scenario is 1080p with built-in speakers and internal storage.
 
-- Kotlin 2.0.21 and Compose for TV.
+- Kotlin 2.0.21, Compose for TV and Material 3 touch controls.
 - AndroidX Media3 1.5.1 / ExoPlayer.
-- libtorrent4j 2.1.0-39, including the ARMv7 and ARM64 native libraries.
+- libtorrent4j 2.1.0-39, including ARMv7, ARM64, x86 and x86-64 native libraries.
 - Gradle 8.9, Android Gradle Plugin 8.7.3, JDK 17.
 - Android NDK 27.0.12077973 and CMake 3.22.1 for the small sparse-storage JNI library.
-- Minimum Android API 28; compile/target API 35. Development APKs contain both ARMv7 and ARM64 native binaries. Android selects the matching ABI at installation.
-- NDK 27 flexible-page-size support builds the storage JNI library for 16 KB ARM64 pages. All packaged ARM64 libraries, including upstream libtorrent and AndroidX graphics, must have ELF LOAD alignment of at least 16 KB; CI checks native contents and APK alignment.
+- Minimum Android API 28; compile/target API 35. Development APKs contain ARMv7, ARM64, x86 and x86-64 native binaries. Android selects the matching ABI at installation.
+- NDK 27 flexible-page-size support builds the storage JNI library for 16 KB pages on 64-bit ABIs. All packaged ARM64 and x86-64 libraries, including upstream libtorrent and AndroidX graphics, must have ELF LOAD alignment of at least 16 KB; CI checks native contents, ELF class/machine and APK alignment.
 
 ## Build and install
 
@@ -125,7 +125,7 @@ export ANDROID_HOME="$(brew --prefix)/share/android-commandlinetools"
 
 Use `adb -s DEVICE` if multiple devices are connected. Configure and authorize ADB on the TV first; never forward its port to the internet. `assembleDebug` produces debug-signed development builds, not the signed APK distributed through Releases. Debug keys from different machines are not interchangeable for in-place updates.
 
-The native checker example uses the macOS NDK host directory; use `linux-x86_64` on Linux. It rejects missing/extra ABIs, missing torrent/storage JNI libraries, ARM64 ELF alignment below 16 KB, and invalid 16 KB APK alignment.
+The native checker example uses the macOS NDK host directory; use `linux-x86_64` on Linux. It rejects missing/extra ABIs, missing torrent/storage JNI libraries, incorrect ELF class/machine, 64-bit ELF alignment below 16 KB, and invalid 16 KB APK alignment.
 
 The Android GitHub Actions workflow builds and lints pull requests and `main`, and uploads a debug APK. No empty test suite is presented as behavioral verification.
 
@@ -139,16 +139,16 @@ With `JAVA_HOME` and `ANDROID_HOME` configured as above:
 ./gradlew assembleRelease testReleaseUnitTest lintRelease
 TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 SIGNING="$HOME/.config/lumastream/signing"
-OUT=".local/release-v0.7.0"
+OUT=".local/release-v0.8.0"
 mkdir -p "$OUT"
 "$TOOLS/zipalign" -P 16 -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$OUT/aligned.apk"
 "$TOOLS/apksigner" sign \
   --ks "$SIGNING/release.p12" --ks-key-alias lumastream \
   --ks-pass "file:$SIGNING/store-password" \
-  --out "$OUT/lumastream-0.7.0-universal.apk" "$OUT/aligned.apk"
-"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.7.0-universal.apk"
-"$TOOLS/zipalign" -c -P 16 4 "$OUT/lumastream-0.7.0-universal.apk"
-(cd "$OUT" && shasum -a 256 lumastream-0.7.0-universal.apk > SHA256SUMS)
+  --out "$OUT/lumastream-0.8.0-universal.apk" "$OUT/aligned.apk"
+"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.8.0-universal.apk"
+"$TOOLS/zipalign" -c -P 16 4 "$OUT/lumastream-0.8.0-universal.apk"
+(cd "$OUT" && shasum -a 256 lumastream-0.8.0-universal.apk > SHA256SUMS)
 ```
 
 Release certificate SHA-256: `c113d8eb54f1eb4cdfe327612236e7dbd7cedce27ab9235a4f4938ad01e35f70`.
@@ -174,6 +174,26 @@ On the ARM64-only Google TV Android 16 / API 36 emulator (`google-tv-ps16k`, act
 The ARM64 check exposed a Settings crash when closing a cache-size dialog after its opener had been disposed by the lazy list. Cache-size and language dialogs now restore the opener's list item and wait for layout before requesting focus. The corrected signed APK passed cache selection/cancellation and catalog-language selection/cancellation, visibly restoring focus. Saving and reinstalling it retained prefetch On, 2 GiB cache and English. Its final playback rendered a first frame with **647,476 / 129,241,752 bytes** downloaded, advanced, and stopped normally. In the earlier ARM64 prefetch check, paused ahead-of-reader bytes grew from zero to 9.1 MiB. Private cache deletion was not directly measured on the non-debuggable ARM64 release; native shutdown was verified. The emulator was stopped after verification.
 
 The certificate and version-code checks support in-place signed-release updates; the isolated reinstall is not an older-release migration test. No new audible-output claim is made, and decoder/network/filesystem limitations still apply.
+
+### Adaptive Android verification (0.8.0)
+
+Debug/release builds, all **158 release JVM tests**, release lint and the four-ABI packaging check passed. A deliberately mismatched x86-64 ELF machine was rejected by the checker. The locally signed APK uses the existing release certificate and contains no copy of the owner's private TMDB token.
+
+On an ARM64 phone emulator with actual **16 KB pages**, real TMDB search, title details, Watch later, source selection and automatic catalog playback were exercised. Sintel rendered with **974,848 / 143,100,616 bytes** downloaded. Playback continued across portrait/landscape rotation without replacing the process. Touch pause/resume, audio and subtitle menus, scrollable subtitle timing and timeline seeking were exercised; a seek to 465,377 ms returned to advancing playback. Back stopped the native session and removed its cache directory. A 320 dp viewport with 1.5× font scale and short landscape keyboard/dialog layouts were inspected; cancelling a provider draft left the saved configuration unchanged.
+
+The final signed APK was installed over signed **0.7.0** on an isolated ARM64 tablet emulator. The app UID and original install time were unchanged, and the previously saved non-default pause-prefetch setting remained On. Touch file selection then rendered Sintel with **123,188 / 129,241,752 bytes** downloaded, advanced visibly and stopped the native session through Back.
+
+On the ARM64 Google TV emulator, D-pad search, focused result visibility, full-width settings focus and result viewport restoration after visiting details were checked. Focused buttons no longer scale outside their row, and initial result focus is distinct from restoring a saved viewport.
+
+These are emulator checks, not physical phone/tablet, x86 runtime, foldable, hardware decoder or audible-output certification. The projector and its installed app were not changed during these development checks.
+
+## Use on phones and tablets
+
+Open LumaStream from the ordinary Android launcher. Search fields are directly editable; submit the keyboard search action or tap Search. Catalog grids resize with the window, long headers scroll with their results, and narrow source screens stack title context above sources. Watch later and History use the same library as TV.
+
+Tap the video to show Media3 controls; use the timeline, pause button, audio settings and CC menu by touch. Rotate between portrait and landscape without restarting the torrent session. System bars, display cutouts and the software keyboard have reserved insets; settings and dialogs scroll in short windows. TV retains landscape presentation and remote controls.
+
+Leaving the app still stops playback and the torrent session. Picture-in-picture and background downloading are not added.
 
 ## Use with a remote
 
