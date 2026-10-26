@@ -13,9 +13,9 @@ android {
         applicationId = "dev.lumastream"
         minSdk = 28
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.7.0"
-        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
+        versionCode = 10
+        versionName = "0.8.0"
+        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") }
         externalNativeBuild {
             cmake {
                 arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
@@ -55,6 +55,8 @@ dependencies {
     implementation("org.libtorrent4j:libtorrent4j:2.1.0-39")
     implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-39")
     implementation("org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-39")
+    implementation("org.libtorrent4j:libtorrent4j-android-x86:2.1.0-39")
+    implementation("org.libtorrent4j:libtorrent4j-android-x86_64:2.1.0-39")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

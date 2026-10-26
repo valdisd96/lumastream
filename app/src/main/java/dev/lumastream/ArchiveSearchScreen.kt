@@ -7,6 +7,10 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -26,7 +30,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -46,8 +52,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
 import dev.lumastream.catalog.ArchiveCatalog
 import dev.lumastream.catalog.ArchiveItem
 import kotlinx.coroutines.CancellationException
@@ -170,8 +174,11 @@ private class ArchiveSearchViewModel : ViewModel() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ArchiveSearchScreen(onOpenTorrent: (String) -> Unit, onBack: () -> Unit) {
+    val layout = LocalAppLayout.current
+    val imeVisible = WindowInsets.isImeVisible
     val model: ArchiveSearchViewModel = viewModel(factory = remember {
         object : androidx.lifecycle.ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -187,9 +194,20 @@ fun ArchiveSearchScreen(onOpenTorrent: (String) -> Unit, onBack: () -> Unit) {
     val backFocus = remember { FocusRequester() }
     val resultFocus = remember { FocusRequester() }
     val queryFocus = remember { FocusRequester() }
-    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    var selectedIndex by rememberSaveable { mutableStateOf<Int?>(null) }
     val resultsScroll = rememberLazyListState()
     val detailsScroll = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun focusNavigation() {
+        if (!layout.isTv) return
+        scope.launch {
+            val scroll = if (state.selected == null) resultsScroll else detailsScroll
+            scroll.scrollToItem(1)
+            withFrameNanos { }
+            backFocus.requestFocus()
+        }
+    }
 
     DisposableEffect(model, lifecycle) {
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) model.activate()
@@ -222,13 +240,15 @@ fun ArchiveSearchScreen(onOpenTorrent: (String) -> Unit, onBack: () -> Unit) {
     }
 
     BackHandler {
-        if (state.selected == null && inputFocused) {
+        if (state.selected == null && inputFocused && (layout.isTv || imeVisible)) {
             dismissKeyboard()
-            backFocus.requestFocus()
+            focusNavigation()
         } else goBack()
     }
 
     LaunchedEffect(state.selected?.identifier) {
+        if (state.selected != null) detailsScroll.scrollToItem(0)
+        if (!layout.isTv) return@LaunchedEffect
         dismissKeyboard()
         if (state.selected == null && selectedIndex != null && state.items.isNotEmpty()) {
             // Header, navigation, query, submit and status precede the result rows.
@@ -236,7 +256,8 @@ fun ArchiveSearchScreen(onOpenTorrent: (String) -> Unit, onBack: () -> Unit) {
             withFrameNanos { }
             resultFocus.requestFocus()
         } else {
-            if (state.selected != null) detailsScroll.scrollToItem(0) else resultsScroll.scrollToItem(0)
+            // Start at navigation so its focus target is composed even in a short window.
+            if (state.selected != null) detailsScroll.scrollToItem(1) else resultsScroll.scrollToItem(1)
             withFrameNanos { }
             backFocus.requestFocus()
         }
@@ -245,9 +266,11 @@ fun ArchiveSearchScreen(onOpenTorrent: (String) -> Unit, onBack: () -> Unit) {
     LaunchedEffect(state.page) {
         if (state.selected == null && state.page > 0) {
             selectedIndex = null
-            resultsScroll.scrollToItem(0)
-            withFrameNanos { }
-            backFocus.requestFocus()
+            resultsScroll.scrollToItem(if (layout.isTv) 1 else 0)
+            if (layout.isTv) {
+                withFrameNanos { }
+                backFocus.requestFocus()
+            }
         }
     }
 
@@ -255,7 +278,7 @@ fun ArchiveSearchScreen(onOpenTorrent: (String) -> Unit, onBack: () -> Unit) {
     LazyColumn(
         state = if (selected == null) resultsScroll else detailsScroll,
         modifier = Modifier.fillMaxSize().background(Color(0xFF10131B))
-            .padding(horizontal = 44.dp, vertical = 28.dp),
+            .padding(horizontal = layout.horizontalPadding, vertical = layout.verticalPadding),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
@@ -280,21 +303,28 @@ fun ArchiveSearchScreen(onOpenTorrent: (String) -> Unit, onBack: () -> Unit) {
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = {
                         dismissKeyboard()
-                        backFocus.requestFocus()
+                        focusNavigation()
                         selectedIndex = null
                         model.search()
                     }),
                 )
             }
             item {
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     ArchiveButton("Edit query") {
-                        queryFocus.requestFocus()
-                        keyboard?.show()
+                        scope.launch {
+                            resultsScroll.scrollToItem(2)
+                            withFrameNanos { }
+                            queryFocus.requestFocus()
+                            keyboard?.show()
+                        }
                     }
                     ArchiveButton("Search", enabled = state.query.isNotBlank() && !state.loading) {
                         dismissKeyboard()
-                        backFocus.requestFocus()
+                        focusNavigation()
                         selectedIndex = null
                         model.search()
                     }
@@ -339,7 +369,7 @@ fun ArchiveSearchScreen(onOpenTorrent: (String) -> Unit, onBack: () -> Unit) {
             item {
                 ArchiveButton("Open torrent", enabled = !state.opening) {
                     dismissKeyboard()
-                    backFocus.requestFocus()
+                    focusNavigation()
                     model.open { openTorrent(it) }
                 }
             }
@@ -371,6 +401,7 @@ fun ArchiveSearchScreen(onOpenTorrent: (String) -> Unit, onBack: () -> Unit) {
 
 @Composable
 private fun ArchiveDetail(text: String, heading: Boolean = false) {
+    val isTv = LocalAppLayout.current.isTv
     // Focusable metadata lets a TV remote scroll through long attribution and license text.
     var focused by remember { mutableStateOf(false) }
     Text(
@@ -378,7 +409,7 @@ private fun ArchiveDetail(text: String, heading: Boolean = false) {
         color = Color.White,
         fontSize = if (heading) 22.sp else 15.sp,
         modifier = Modifier.fillMaxWidth().background(if (focused) Color(0xFF283246) else Color.Transparent)
-            .onFocusChanged { focused = it.isFocused }.focusable().padding(8.dp),
+            .onFocusChanged { focused = it.isFocused }.focusable(enabled = isTv).padding(8.dp),
     )
 }
 
@@ -392,17 +423,11 @@ private fun ArchiveLoading(label: String) {
 
 @Composable
 private fun ArchiveButton(label: String, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
-    Button(
+    AppButton(
         onClick = onClick,
         modifier = modifier,
         enabled = enabled,
-        colors = ButtonDefaults.colors(
-            containerColor = Color(0xFF283246),
-            contentColor = Color.White,
-            focusedContainerColor = Color(0xFFB8D8FF),
-            focusedContentColor = Color(0xFF10213B),
-        ),
     ) {
-        androidx.tv.material3.Text(label, fontSize = 15.sp)
+        Text(label, color = Color.White, fontSize = 15.sp)
     }
 }

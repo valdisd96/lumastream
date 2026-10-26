@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""Verify universal ARM APK contents and 16 KB native library alignment."""
+"""Verify universal APK ABI contents, ELF machines and 16 KB native alignment."""
 
 import argparse
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
 
-SUPPORTED_ABIS = {"armeabi-v7a", "arm64-v8a"}
+# ELF class and e_machine values, independent of readelf's display wording.
+ABI_ELF = {
+    "armeabi-v7a": (1, 40),
+    "arm64-v8a": (2, 183),
+    "x86": (1, 3),
+    "x86_64": (2, 62),
+}
+SUPPORTED_ABIS = set(ABI_ELF)
 REQUIRED_LIBRARIES = {"libtorrent4j.so", "liblumastream_storage.so"}
 PAGE_SIZE = 16 * 1024
 
@@ -39,10 +47,24 @@ def verify(apk, readelf, zipalign):
         with tempfile.TemporaryDirectory(prefix="native-packaging-", dir=scratch) as directory:
             library = Path(directory) / "library.so"
             for entry in entries:
-                if not entry.filename.startswith("lib/arm64-v8a/") or not entry.filename.endswith(".so"):
+                if not entry.filename.endswith(".so"):
                     continue
                 with archive.open(entry) as source, library.open("wb") as target:
                     shutil.copyfileobj(source, target)
+                abi = entry.filename.split("/")[1]
+                with library.open("rb") as source:
+                    header = source.read(20)
+                if len(header) != 20 or header[:4] != b"\x7fELF" or header[5] != 1:
+                    raise ValueError(f"{entry.filename}: expected a little-endian ELF library")
+                elf_class, machine = header[4], struct.unpack_from("<H", header, 18)[0]
+                if (elf_class, machine) != ABI_ELF[abi]:
+                    raise ValueError(
+                        f"{entry.filename}: expected ELF class/machine {ABI_ELF[abi]}, "
+                        f"found {(elf_class, machine)}"
+                    )
+                print(f"{entry.filename}: ELF class and machine match {abi}")
+                if elf_class != 2:
+                    continue
                 result = subprocess.run(
                     [str(readelf), "--program-headers", "--wide", str(library)],
                     check=True, capture_output=True, text=True,
@@ -62,7 +84,7 @@ def verify(apk, readelf, zipalign):
                 print(f"{entry.filename}: all {len(alignments)} ELF LOAD segments align >=16 KB")
 
     subprocess.run([str(zipalign), "-c", "-P", "16", "4", str(apk)], check=True)
-    print(f"Verified {apk}: ARMv7 + ARM64 libraries, 16 KB ELF and APK alignment")
+    print(f"Verified {apk}: {', '.join(sorted(SUPPORTED_ABIS))}, 16 KB ELF and APK alignment")
 
 
 def main():

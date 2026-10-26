@@ -3,6 +3,8 @@ package dev.lumastream
 import android.app.Application
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -10,20 +12,31 @@ import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -32,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -61,8 +75,6 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
 import dev.lumastream.torrent.TorrentEngine
 import dev.lumastream.torrent.TorrentState
 import dev.lumastream.catalog.CatalogConfiguration
@@ -104,6 +116,8 @@ private const val PLAYER_TAG = "LumaPlayer"
 @androidx.annotation.OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
     private val model: PlaybackViewModel by viewModels()
+    private val isTv: Boolean
+        get() = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) == Configuration.UI_MODE_TYPE_TELEVISION
     private var activePlayerView: PlayerView? = null
     private var navigatingPlayerActions = false
     private var focusedPlayerAction = androidx.media3.ui.R.id.exo_settings
@@ -149,7 +163,7 @@ class MainActivity : ComponentActivity() {
     }
     private var choosingSubtitle = false
     private fun finishPlayerMenu() {
-        activePlayerView?.let(::leavePlayerActions)
+        activePlayerView?.let { if (isTv) leavePlayerActions(it) else it.showController() }
     }
 
     private val subtitlePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -181,7 +195,7 @@ class MainActivity : ComponentActivity() {
                         subtitlePicker.launch(arrayOf("*/*"))
                     } catch (_: ActivityNotFoundException) {
                         choosingSubtitle = false
-                        AlertDialog.Builder(this).setMessage("This TV has no document picker. Install a document picker to load external subtitles.")
+                        AlertDialog.Builder(this).setMessage("This device has no document picker. Install a document picker to load external subtitles.")
                             .setPositiveButton("OK", null).show()
                     }
                 }
@@ -314,7 +328,8 @@ class MainActivity : ComponentActivity() {
         adjustment("Later +1.0 s", 1_000)
         adjustment("Reset to 0.0 s", null)
         refresh()
-        AlertDialog.Builder(this).setTitle("Subtitle timing").setView(content)
+        val scroll = android.widget.ScrollView(this).apply { addView(content) }
+        AlertDialog.Builder(this).setTitle("Subtitle timing").setView(scroll)
             .setPositiveButton("Apply") { _, _ -> model.setSubtitleDelay(delayMs) }
             .setNegativeButton("Cancel", null)
             .setOnDismissListener { finishPlayerMenu() }.show()
@@ -322,6 +337,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (isTv) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+                navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            )
+        }
         val originalCallback = window.callback
         window.callback = object : android.view.Window.Callback by originalCallback {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean =
@@ -329,7 +353,7 @@ class MainActivity : ComponentActivity() {
         }
         if (savedInstanceState == null) model.acceptIntent(intent)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            AdaptiveContent(isTv) {
                 PlaybackScreen(model, onExit = { finishAndRemoveTask() }, onPlayerViewChanged = { view ->
                     if (activePlayerView !== view) {
                         activePlayerView?.player?.removeListener(playerActionsListener)
@@ -443,7 +467,7 @@ class MainActivity : ComponentActivity() {
         subtitleSearch?.cancel()
         subtitleSearch = null
         // A document picker temporarily covers playback; keep the paused session until its result.
-        if (!choosingSubtitle) {
+        if (!choosingSubtitle && !isChangingConfigurations) {
             activePlayerView = null
             model.stop("Stopped while LumaStream is in the background. Open a source to resume.")
             if (model.screen.value.page == AppPage.PLAYER) model.navigate(AppPage.CATALOG)
@@ -1058,10 +1082,27 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
 }
 
 @Composable
+private fun AdaptiveContent(isTv: Boolean, content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = darkColorScheme()) {
+        androidx.tv.material3.MaterialTheme {
+            BoxWithConstraints(
+                Modifier.fillMaxSize().background(Color(0xFF10131B))
+                    .then(if (isTv) Modifier else Modifier.safeDrawingPadding().imePadding()),
+            ) {
+                val layout = remember(isTv, maxWidth, maxHeight) { AppLayout(isTv, maxWidth, maxHeight) }
+                CompositionLocalProvider(LocalAppLayout provides layout, content = content)
+            }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlayerViewChanged: (PlayerView?) -> Unit) {
     val screen by model.screen.collectAsState()
     val torrent by model.torrent.collectAsState()
+    val layout = LocalAppLayout.current
     when (screen.page) {
         AppPage.CATALOG -> {
             MovieCatalogScreen(
@@ -1086,7 +1127,8 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
             if (entry != null && selection != null) {
                 androidx.compose.ui.window.Dialog(onDismissRequest = model::dismissResume) {
                     Column(
-                        Modifier.background(Color(0xFF192535)).padding(24.dp),
+                        Modifier.heightIn(max = layout.height).verticalScroll(rememberScrollState())
+                            .background(Color(0xFF192535)).padding(if (layout.compact) 16.dp else 24.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         Text(selection.details.title.title, color = Color.White, fontSize = 24.sp)
@@ -1110,6 +1152,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
                         ) { model.confirmResume(true) }
                         RemoteButton("Cancel") { model.dismissResume() }
                         LaunchedEffect(entry.key) {
+                            if (!layout.isTv) return@LaunchedEffect
                             withFrameNanos { }
                             initialFocus.requestFocus()
                         }
@@ -1149,7 +1192,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
     if (player != null) {
         Box(Modifier.fillMaxSize()) {
             VideoSurface(player, screen.title, torrent, screen.error, screen.subtitleMessage,
-                screen.episodeSelection != null, screen.automaticStatus != null, onPlayerViewChanged)
+                screen.episodeSelection != null, screen.automaticStatus != null, onPlayerViewChanged, ::returnToCatalog)
             screen.automaticStatus?.let { status ->
                 AutomaticStartupOverlay(status, torrent, model::chooseAutomaticSourceManually)
             }
@@ -1166,6 +1209,7 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
     val firstFileFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
     LaunchedEffect(torrent.files, screen.busy) {
+        if (!layout.isTv) return@LaunchedEffect
         if (torrent.files.isNotEmpty() && !screen.busy) {
             // Header, status and section heading precede the video choices.
             listState.scrollToItem(3)
@@ -1179,11 +1223,17 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
     }
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize().background(Color(0xFF10131B)).padding(horizontal = 44.dp, vertical = 28.dp),
+        modifier = Modifier.fillMaxSize().background(Color(0xFF10131B))
+            .padding(horizontal = layout.horizontalPadding, vertical = layout.verticalPadding),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = if (layout.compact) 1 else 2,
+            ) {
                 Text("LumaStream", color = Color.White, fontSize = 30.sp)
                 val recovery = screen.error != null && screen.recoveryEntry != null
                 val nextEpisode = screen.episodeSelection != null
@@ -1245,8 +1295,10 @@ private fun PlaybackScreen(model: PlaybackViewModel, onExit: () -> Unit, onPlaye
 @Composable
 private fun AutomaticStartupOverlay(status: String, torrent: TorrentState, onManual: () -> Unit) {
     val focus = remember { FocusRequester() }
+    val layout = LocalAppLayout.current
     Column(
-        Modifier.fillMaxWidth().background(Color(0xEE192535)).padding(28.dp),
+        Modifier.fillMaxWidth().heightIn(max = layout.height).verticalScroll(rememberScrollState())
+            .background(Color(0xEE192535)).padding(if (layout.compact) 16.dp else 28.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(status, color = Color.White, fontSize = 22.sp)
@@ -1256,6 +1308,7 @@ private fun AutomaticStartupOverlay(status: String, torrent: TorrentState, onMan
         RemoteButton("Choose manually / Cancel", Modifier.focusRequester(focus), onClick = onManual)
     }
     LaunchedEffect(Unit) {
+        if (!layout.isTv) return@LaunchedEffect
         withFrameNanos { }
         focus.requestFocus()
     }
@@ -1268,22 +1321,13 @@ private fun RemoteButton(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
-    Button(
-        onClick = onClick,
-        modifier = modifier,
-        enabled = enabled,
-        colors = ButtonDefaults.colors(
-            containerColor = Color(0xFF283246),
-            contentColor = Color.White,
-            focusedContainerColor = Color(0xFFB8D8FF),
-            focusedContentColor = Color(0xFF10213B),
-        ),
-    ) {
-        androidx.tv.material3.Text(label, fontSize = 15.sp)
+    AppButton(onClick = onClick, modifier = modifier, enabled = enabled) {
+        Text(label, fontSize = 15.sp)
     }
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 private fun VideoSurface(
     player: ExoPlayer,
@@ -1294,7 +1338,10 @@ private fun VideoSurface(
     nextEpisodeAvailable: Boolean,
     automaticPreparing: Boolean,
     onPlayerViewChanged: (PlayerView?) -> Unit,
+    onExit: () -> Unit,
 ) {
+    val layout = LocalAppLayout.current
+    var showTransferDetails by remember(player) { mutableStateOf(false) }
     var controlsVisible by remember(player) { mutableStateOf(true) }
     var buffering by remember(player) { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
     var bufferedMs by remember(player) { mutableStateOf(player.totalBufferedDuration) }
@@ -1336,7 +1383,10 @@ private fun VideoSurface(
                     isFocusable = true
                     descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
                     onPlayerViewChanged(this)
-                    if (!automaticPreparing) post { requestFocus(); showController() }
+                    if (!automaticPreparing) post {
+                        if (layout.isTv) requestFocus()
+                        showController()
+                    }
                 }
             },
             update = { view ->
@@ -1344,7 +1394,10 @@ private fun VideoSurface(
                 val wasPreparing = !view.useController
                 view.useController = !automaticPreparing
                 view.controllerAutoShow = !automaticPreparing
-                if (wasPreparing && !automaticPreparing) view.post { view.requestFocus(); view.showController() }
+                if (wasPreparing && !automaticPreparing) view.post {
+                    if (layout.isTv) view.requestFocus()
+                    view.showController()
+                }
                 view.setShowNextButton(nextEpisodeAvailable)
                 view.findViewById<View>(androidx.media3.ui.R.id.exo_next).apply {
                     isEnabled = nextEpisodeAvailable
@@ -1360,16 +1413,31 @@ private fun VideoSurface(
         if (controlsVisible || buffering || torrent.error != null || subtitleError != null || subtitleMessage != null) {
             Column(
                 modifier = Modifier.align(Alignment.TopStart).fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.65f)).padding(horizontal = 30.dp, vertical = 10.dp),
+                    .heightIn(max = if (layout.isTv) layout.height else layout.height * 0.45f)
+                    .verticalScroll(rememberScrollState())
+                    .background(Color.Black.copy(alpha = 0.65f))
+                    .padding(horizontal = if (layout.isTv) 30.dp else 12.dp, vertical = 8.dp),
             ) {
+                if (!layout.isTv && controlsVisible && !automaticPreparing) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AppButton(onClick = onExit) { Text("Back") }
+                        AppButton(onClick = { showTransferDetails = !showTransferDetails }) {
+                            Text(if (showTransferDetails) "Hide info" else "Playback info")
+                        }
+                    }
+                }
                 Text(title, color = Color.White, fontSize = 17.sp, maxLines = 1)
-                Text("${if (buffering) "Buffering · " else ""}${transferLabel(torrent)} · Buffered ${bufferedMs / 1000} s", color = Color(0xFFD3D9E5), fontSize = 15.sp)
+                if (layout.isTv || buffering || showTransferDetails) {
+                    Text("${if (buffering) "Buffering · " else ""}${transferLabel(torrent)} · Buffered ${bufferedMs / 1000} s", color = Color(0xFFD3D9E5), fontSize = 15.sp)
+                }
                 if (buffering) Text(loadLabel(torrent), color = Color(0xFFB8D8FF), fontSize = 15.sp)
-                if (controlsVisible) Text("Left/right: seek · OK: pause/play · Up: subtitles/timing · Down: CC/settings${if (nextEpisodeAvailable) "/next episode (Right → OK)" else ""} · Back: stop",
+                if (controlsVisible && layout.isTv) Text("Left/right: seek · OK: pause/play · Up: subtitles/timing · Down: CC/settings${if (nextEpisodeAvailable) "/next episode (Right → OK)" else ""} · Back: stop",
                     color = Color(0xFFD3D9E5), fontSize = 12.sp)
-                Text("Cache ${formatBytes(torrent.cacheBytes)} / ${formatBytes(torrent.cacheLimitBytes)}", color = Color(0xFFBCC5D7), fontSize = 12.sp)
-                torrent.pausePrefetchStatus?.let {
-                    Text("$it · Ahead of reader ${formatBytes(torrent.prefetchedBytes)}", color = Color(0xFFB8D8FF), fontSize = 13.sp)
+                if (layout.isTv || showTransferDetails) {
+                    Text("Cache ${formatBytes(torrent.cacheBytes)} / ${formatBytes(torrent.cacheLimitBytes)}", color = Color(0xFFBCC5D7), fontSize = 12.sp)
+                    torrent.pausePrefetchStatus?.let {
+                        Text("$it · Ahead of reader ${formatBytes(torrent.prefetchedBytes)}", color = Color(0xFFB8D8FF), fontSize = 13.sp)
+                    }
                 }
                 subtitleMessage?.let { Text(it, color = Color(0xFFB8D8FF), fontSize = 13.sp) }
                 (subtitleError ?: torrent.error)?.let { Text(it, color = Color(0xFFFFA6A6), fontSize = 13.sp) }
