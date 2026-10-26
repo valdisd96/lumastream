@@ -33,6 +33,10 @@ data class WatchEntry(
     val key: String get() = selection.episode?.let { "$titleKey:${it.season}:${it.number}" } ?: titleKey
 }
 
+/** One card per title; keep the exact latest episode/source and retain all stored resume points. */
+internal fun historyCards(entries: List<WatchEntry>): List<WatchEntry> =
+    entries.sortedByDescending { it.updatedAtMs }.distinctBy { it.titleKey }
+
 internal fun removeHistoryEntry(entries: List<WatchEntry>, key: String): List<WatchEntry> =
     entries.filterNot { it.key == key }
 

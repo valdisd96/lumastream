@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Group History into one card per movie or series, using the most recently played episode and its exact resume position rather than displaying every episode separately. Stored episode progress and the existing 100-record bound are unchanged.
+- Keep history focus keyed by movie/series identity when the representative episode changes. Exact-episode history actions and Choose episode remain available.
+- Verified grouped cards, latest-episode dialog, retained episode data and focus restoration in an isolated WK03K app with synthetic history. Debug build, lint and all 149 JVM tests passed; no playback was started and the installed release/data were unchanged.
 - Added opt-in **Prefetch while paused**: selected-video data accumulates in bounded low-priority batches until the disk-cache budget is full or the video ends, without increasing Media3's RAM-buffer target.
 - Preserve the forward reserve on resume and nearby seeks; distant seeks redirect downloads. Required video and auxiliary reads retain priority, with whole-piece accounting and one piece of auxiliary headroom.
 - Added persisted **1 / 2 / 4 / 8 GiB** torrent-cache choices, defaulting to 4 GiB. Older settings keep their existing preferences and prefetch starts disabled; actual limits remain constrained by free space and the 1 GiB reserve.

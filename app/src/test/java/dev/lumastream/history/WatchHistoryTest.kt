@@ -82,6 +82,44 @@ class WatchHistoryTest {
         assertEquals(listOf(newest) + entries.drop(5).dropLast(1).reversed(), loaded)
     }
 
+    @Test fun historyCardsGroupTitlesByRecencyWithoutLosingEpisodeResumePoints() = runBlocking {
+        val earlierEpisodePlayedLast = entry.copy(updatedAtMs = 400, positionMs = 1234)
+        val laterEpisode = entry.copy(
+            selection = entry.selection.copy(episode = episode.copy(number = 9)),
+            updatedAtMs = 100, completed = true,
+        )
+        val nextSeason = entry.copy(
+            selection = entry.selection.copy(episode = episode.copy(season = 2)),
+            updatedAtMs = 200,
+        )
+        val sameIdMovie = entry.copy(
+            selection = entry.selection.copy(details = details.copy(title = title.copy(kind = MediaKind.MOVIE)), episode = null),
+            updatedAtMs = 300,
+        )
+        val anotherSeries = entry.copy(
+            selection = entry.selection.copy(details = details.copy(title = title.copy(id = 43))),
+            updatedAtMs = 500,
+        )
+        val entries = listOf(laterEpisode, sameIdMovie, nextSeason, anotherSeries, earlierEpisodePlayedLast)
+        WatchHistoryStore(file).save(entries)
+        val restored = WatchHistoryStore(file).load()
+        assertEquals(listOf(anotherSeries, earlierEpisodePlayedLast, sameIdMovie), historyCards(restored))
+        assertEquals(entries.sortedByDescending { it.updatedAtMs }, WatchHistoryStore(file).load())
+        assertEquals(emptyList<WatchEntry>(), historyCards(emptyList()))
+    }
+
+    @Test fun groupedCardTracksLatestExactEpisodeEvenWhenCompletedAndKeepsTitleIdentity() {
+        val next = entry.copy(
+            selection = entry.selection.copy(episode = episode.copy(number = 3), source = source.copy(infoHash = "b".repeat(40))),
+            updatedAtMs = entry.updatedAtMs + 1, completed = true,
+        )
+        val before = historyCards(listOf(entry)).single()
+        val after = historyCards(listOf(entry, next)).single()
+        assertEquals(next, after)
+        assertEquals(before.titleKey, after.titleKey)
+        assertEquals(listOf(entry), historyCards(removeHistoryEntry(listOf(entry, next), next.key)))
+    }
+
     @Test fun manualCompletionAndResetAffectOnlyTheChosenEpisodeAndPersist() = runBlocking {
         val other = entry.copy(selection = entry.selection.copy(episode = episode.copy(number = 3)),
             updatedAtMs = entry.updatedAtMs - 1)
