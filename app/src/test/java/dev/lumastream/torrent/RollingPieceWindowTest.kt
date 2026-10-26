@@ -120,6 +120,131 @@ class RollingPieceWindowTest {
         assertEquals(1024L, policy.reservedBytes)
     }
 
+    @Test fun prefetchIncludesCancelledAdmissionsAndKeepsOneAuxiliaryPieceAvailable() {
+        val policy = RollingPieceWindow(100, 1024, 20L * 1024, 4L * 1024, 2L * 1024)
+        policy.admit(10, 13)
+        var next = 14
+        while (true) {
+            val end = policy.prefetchEnd(next, 99, enabled = true)
+            if (end < next) break
+            assertTrue(end - next < 4)
+            policy.admitPrefetch(10, next, end)
+            next = end + 1
+        }
+        // No pieces are reported complete: cancelled/in-flight writes still consume budget.
+        assertEquals(29, next)
+        assertEquals(19L * 1024, policy.reservedBytes)
+        assertFalse(policy.needsEviction(90, 90))
+        policy.admit(90, 90)
+        assertEquals(20L * 1024, policy.reservedBytes)
+        assertEquals(28, policy.prefetchEnd(29, 99, enabled = true))
+        // Previously admitted partial pieces can restart without a second reservation.
+        assertEquals(17, policy.prefetchEnd(14, 99, enabled = true))
+        assertEquals(20L * 1024, policy.reservedBytes)
+    }
+
+    @Test fun disablingPrefetchStopsAdmissionWithoutDroppingForwardReserve() {
+        val policy = RollingPieceWindow(100, 1024, 16L * 1024, 4L * 1024, 3L * 1024)
+        policy.admit(0, 3)
+        policy.admitPrefetch(0, 4, 7)
+        policy.admitPrefetch(0, 8, 11)
+        policy.admitPrefetch(0, 12, 14)
+        assertEquals(14, policy.prefetchEnd(15, 99, enabled = false))
+        assertEquals(15L * 1024, policy.reservedBytes)
+        assertEquals(14, policy.retainedEnd(1, 99))
+        policy.admit(90, 90)
+        for (demand in 1..11) {
+            val end = policy.windowEnd(demand, 99)
+            assertFalse("Resume must use the cached reserve before rolling over", policy.needsEviction(demand, end))
+            policy.admit(demand, end)
+        }
+        assertTrue(policy.needsEviction(12, policy.windowEnd(12, 99)))
+        val keepStart = policy.retainedStartForAdmission(12, 0, 99, 12, 15)
+        assertEquals(9, keepStart)
+        policy.reset(keepStart, policy.retainedEnd(12, 99))
+        assertFalse(policy.needsEviction(12, 14))
+        policy.admit(12, 15)
+        assertEquals(7L * 1024, policy.reservedBytes)
+    }
+
+    @Test fun auxiliaryRolloverReclaimsLookbehindNotPausedForwardReserve() {
+        val policy = RollingPieceWindow(100, 1024, 12L * 1024, 2L * 1024, 3L * 1024)
+        policy.admit(10, 11)
+        var next = 12
+        while (next <= 20) {
+            val end = policy.prefetchEnd(next, 99, enabled = true)
+            policy.admitPrefetch(10, next, end)
+            next = end + 1
+        }
+        // An auxiliary piece inside lookbehind consumes the last slot.
+        policy.admit(9, 9)
+        assertTrue(policy.needsEviction(90, 90))
+        val keepStart = policy.retainedStartForAdmission(10, 0, 99, 90, 90)
+        val keepEnd = policy.retainedEnd(10, 99)
+        assertEquals(10, keepStart)
+        assertEquals(20, keepEnd)
+        policy.reset(keepStart, keepEnd)
+        policy.admit(90, 90)
+        assertEquals(12L * 1024, policy.reservedBytes)
+        assertEquals(20, policy.retainedEnd(10, 99))
+        assertEquals(20, policy.prefetchEnd(21, 99, enabled = true))
+    }
+
+    @Test fun seeksWithinReserveReuseItAndDistantSeeksRedirectRetention() {
+        val policy = RollingPieceWindow(100, 1024, 12L * 1024, 2L * 1024, 3L * 1024)
+        policy.admit(10, 11)
+        policy.admitPrefetch(10, 12, 20)
+        policy.redirectDemand(15)
+        assertEquals(20, policy.retainedEnd(15, 99))
+        policy.redirectDemand(70)
+        assertEquals(71, policy.retainedEnd(70, 99))
+        assertTrue(policy.needsEviction(70, 71))
+        policy.reset(policy.retainedStartForAdmission(70, 0, 99, 70, 71), policy.retainedEnd(70, 99))
+        policy.admit(70, 71)
+        policy.admitPrefetch(70, 72, policy.prefetchEnd(72, 99, enabled = true))
+        assertEquals(4L * 1024, policy.reservedBytes)
+        assertEquals(73, policy.retainedEnd(70, 99))
+    }
+
+    @Test fun prefetchStopsAtSelectedFileEndAndUsesOrdinaryBatchBound() {
+        val policy = RollingPieceWindow(1000, 1024, 1000L * 1024, Long.MAX_VALUE, 0)
+        policy.admit(0, 31)
+        assertEquals(63, policy.prefetchEnd(32, 999, enabled = true))
+        assertEquals(40, policy.prefetchEnd(32, 40, enabled = true))
+        policy.admitPrefetch(0, 32, 40)
+        assertEquals(40, policy.retainedEnd(0, 40))
+    }
+
+    @Test fun verifiedAheadCountsOnlyContiguousResidentBytesFromReaderCursor() {
+        val ahead = VerifiedReaderAhead(fileOffset = 500, fileSize = 3500, pieceLength = 1024)
+        ahead.record(3) // A distant movie-hash read must not move the video reader.
+        assertEquals(0L, ahead.bytesAhead())
+        assertFalse(ahead.reachesEnd())
+        ahead.moveReader(0)
+        ahead.record(0)
+        assertEquals(524L, ahead.bytesAhead())
+        ahead.record(2)
+        assertEquals(524L, ahead.bytesAhead())
+        assertFalse(ahead.reachesEnd())
+        ahead.record(1)
+        assertEquals(3500L, ahead.bytesAhead())
+        assertTrue(ahead.reachesEnd())
+        ahead.moveReader(1000)
+        assertEquals(2500L, ahead.bytesAhead())
+        ahead.moveReader(3500)
+        assertEquals(0L, ahead.bytesAhead())
+        ahead.moveReader(2000)
+        assertEquals(1500L, ahead.bytesAhead())
+        ahead.retain(1, 2)
+        assertEquals(572L, ahead.bytesAhead())
+        assertFalse(ahead.reachesEnd())
+        ahead.moveReader(0)
+        assertEquals(0L, ahead.bytesAhead())
+        ahead.record(0)
+        assertEquals(2572L, ahead.bytesAhead())
+        assertEquals(3, ahead.firstMissing(1))
+    }
+
     @Test fun retainedFileRangesMapCrossFilePiecesWithoutKeepingOtherBytes() {
         assertEquals(900L..999L, retainedFileRange(0, 1000, 900, 1200))
         assertEquals(0L..199L, retainedFileRange(1000, 1000, 900, 1200))

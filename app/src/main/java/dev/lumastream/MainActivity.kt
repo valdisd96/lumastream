@@ -703,7 +703,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                 recoveryRequested = false, busy = true, error = null, notice = "Opening selected source…", title = "")
         }
         historyReady.await()
-        engine.open(catalogMagnet(selection.source))
+        openTorrent(catalogMagnet(selection.source))
         val selected = selectCatalogFile(selection, engine.state.value.files)
         val resolved = selection.copy(source = selection.source.copy(fileIndex = selected.index, filename = selected.name))
         mutableScreen.update { it.copy(recoveryEntry = it.recoveryEntry?.copy(selection = resolved)) }
@@ -735,7 +735,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                         throw AutomaticStartupFailure("The torrent engine could not fetch metadata. Check connectivity and free storage, or choose another source.")
                     }
                     try {
-                        engine.open(catalogMagnet(selection.source))
+                        openTorrent(catalogMagnet(selection.source))
                         val file = selectCatalogFile(selection, engine.state.value.files)
                         val resolved = selection.copy(source = selection.source.copy(fileIndex = file.index, filename = file.name))
                         Log.i(PLAYER_TAG, "auto_metadata elapsedMs=${attempt.budget.elapsed()} attemptMs=${attempt.budget.attemptElapsed()}")
@@ -825,9 +825,14 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
             mutableScreen.update {
                 it.copy(busy = true, error = null, notice = "Opening selected source…", title = "")
             }
-            engine.open(uri)
+            openTorrent(uri)
             mutableScreen.update { it.copy(notice = "Choose a video file below to start playback.") }
         }
+    }
+
+    private suspend fun openTorrent(uri: Uri) {
+        configurationReady.await()
+        engine.open(uri, screen.value.configuration.torrentCacheGiB.toLong() * 1024 * 1024 * 1024)
     }
 
     fun select(index: Int) {
@@ -863,6 +868,15 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
                     episodeSelection = selection?.takeIf { value -> value.episode != null })
             }
             player.addListener(object : Player.Listener {
+                override fun onEvents(playerEvents: Player, events: Player.Events) {
+                    if (screen.value.player !== player) return
+                    engine.setPausePrefetch(
+                        screen.value.configuration.pausePrefetchEnabled &&
+                            !player.playWhenReady && player.playerError == null &&
+                            (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING),
+                    )
+                }
+
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (screen.value.player !== player) return
                     val name = when (playbackState) {
@@ -1016,6 +1030,7 @@ class PlaybackViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun releasePlayer() {
+        engine.setPausePrefetch(false)
         saveProgress()
         activeSelection = null
         renderedVideo = false
@@ -1353,6 +1368,9 @@ private fun VideoSurface(
                 if (controlsVisible) Text("Left/right: seek · OK: pause/play · Up: subtitles/timing · Down: CC/settings${if (nextEpisodeAvailable) "/next episode (Right → OK)" else ""} · Back: stop",
                     color = Color(0xFFD3D9E5), fontSize = 12.sp)
                 Text("Cache ${formatBytes(torrent.cacheBytes)} / ${formatBytes(torrent.cacheLimitBytes)}", color = Color(0xFFBCC5D7), fontSize = 12.sp)
+                torrent.pausePrefetchStatus?.let {
+                    Text("$it · Ahead of reader ${formatBytes(torrent.prefetchedBytes)}", color = Color(0xFFB8D8FF), fontSize = 13.sp)
+                }
                 subtitleMessage?.let { Text(it, color = Color(0xFFB8D8FF), fontSize = 13.sp) }
                 (subtitleError ?: torrent.error)?.let { Text(it, color = Color(0xFFFFA6A6), fontSize = 13.sp) }
             }

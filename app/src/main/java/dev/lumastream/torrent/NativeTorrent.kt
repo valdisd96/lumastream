@@ -53,6 +53,8 @@ internal data class TorrentSnapshot(
     val requiredBlockCount: Int,
     val requiredWaitMillis: Long,
     val requiredDataStatus: RequiredDataStatus,
+    val prefetchedBytes: Long,
+    val pausePrefetchStatus: String?,
 )
 
 private data class StorageFile(val path: File, val offset: Long, val size: Long)
@@ -82,6 +84,12 @@ internal class NativeTorrent(
     private var infoHash = ""
     private var selection: TorrentSelection? = null
     @Volatile private var selectedProgress: SelectedDownloadProgress? = null
+    @Volatile private var verifiedAhead: VerifiedReaderAhead? = null
+    @Volatile private var pausePrefetchRequested = false
+    private var prefetchStart = -1
+    private var prefetchEnd = -1
+    private var nextPrefetch = -1
+    private var auxiliaryPiece = -1
     private var requiredPieceIndex: Int? = null
     private var requiredBlocksLoaded = 0
     private var requiredBlockCount = 0
@@ -120,7 +128,11 @@ internal class NativeTorrent(
                 is FileErrorAlert -> recordFailure(IOException("Torrent disk error: ${alert.error().message} (${alert.filename()})"))
                 is TorrentErrorAlert -> recordFailure(IOException("Torrent error: ${alert.error().message}"))
                 is MetadataFailedAlert -> recordFailure(IOException("Invalid torrent metadata: ${alert.error.message}"))
-                is PieceFinishedAlert -> selectedProgress?.record(alert.pieceIndex())
+                is PieceFinishedAlert -> {
+                    val piece = alert.pieceIndex()
+                    selectedProgress?.record(piece)
+                    verifiedAhead?.record(piece)
+                }
                 else -> when (alert.type()) {
                     AlertType.FILE_PRIO -> priorityEvents.incrementAndGet()
                     else -> Unit
@@ -254,6 +266,11 @@ internal class NativeTorrent(
         true
     }
 
+    /** UI callers only publish intent; native priorities are maintained by the IO monitor. */
+    fun setPausePrefetch(enabled: Boolean) {
+        pausePrefetchRequested = enabled
+    }
+
     suspend fun select(index: Int): TorrentSelection {
         val target: Long
         val chosen: TorrentSelection
@@ -267,6 +284,11 @@ internal class NativeTorrent(
             reader = null
             selection = null
             selectedProgress = null
+            verifiedAhead = null
+            prefetchStart = -1
+            prefetchEnd = -1
+            nextPrefetch = -1
+            auxiliaryPiece = -1
             clearRequiredData()
             windowStart = -1
             windowEnd = -1
@@ -299,6 +321,8 @@ internal class NativeTorrent(
             selection = chosen
             val progress = SelectedDownloadProgress(chosen.video.torrentOffset, chosen.video.file.size, pieceLength)
             selectedProgress = progress
+            val ahead = VerifiedReaderAhead(chosen.video.torrentOffset, chosen.video.file.size, pieceLength)
+            verifiedAhead = ahead
             val status = current.status(TorrentHandle.QUERY_PIECES)
             try {
                 val pieces = status.pieces()
@@ -306,7 +330,10 @@ internal class NativeTorrent(
                     val first = (chosen.video.torrentOffset / pieceLength).toInt()
                     val last = ((chosen.video.torrentOffset + chosen.video.file.size - 1) / pieceLength).toInt()
                     for (piece in first..minOf(last, pieces.size() - 1)) {
-                        if (pieces.getBit(piece)) progress.record(piece)
+                        if (pieces.getBit(piece)) {
+                            progress.record(piece)
+                            ahead.record(piece)
+                        }
                     }
                 } finally {
                     pieces.swig().delete()
@@ -408,9 +435,15 @@ internal class NativeTorrent(
                             // A concurrently replaced selection owns its own priority map.
                             if (!invalidated && !stopped && selection?.serial == chosen.serial) {
                                 handle?.let { current ->
+                                    auxiliaryPiece = -1
                                     if (piece !in windowStart..windowEnd) {
                                         current.resetPieceDeadline(piece)
-                                        current.piecePriority(piece, Priority.IGNORE)
+                                        val priority = if (pausePrefetchRequested && piece in prefetchStart..prefetchEnd) {
+                                            Priority.DEFAULT
+                                        } else {
+                                            Priority.IGNORE
+                                        }
+                                        current.piecePriority(piece, priority)
                                     } else if (!current.havePiece(piece)) {
                                         current.setPieceDeadline(piece, (piece - windowStart) * 250)
                                     }
@@ -435,14 +468,15 @@ internal class NativeTorrent(
             val videoDemand = lastDemand
             val firstVideoPiece = (chosen.video.torrentOffset / pieceLength).toInt()
             val lastVideoPiece = ((chosen.video.torrentOffset + chosen.video.file.size - 1) / pieceLength).toInt()
-            // Keep the playback neighborhood, not the distant subtitle/hash position.
-            // The cache always reserves one piece beyond that retained neighborhood.
-            rotate(chosen, if (videoDemand >= 0) videoDemand else firstVideoPiece, lastVideoPiece)
+            // Preserve the entire forward reserve. Only consumed lookbehind or unrelated
+            // admissions may be reclaimed for this one serialized auxiliary read.
+            rotate(chosen, if (videoDemand >= 0) videoDemand else firstVideoPiece, lastVideoPiece, piece, piece)
             if (videoDemand >= 0) {
                 demand(chosen, maxOf(0L, videoDemand.toLong() * pieceLength - chosen.video.torrentOffset))
             }
         }
         policy.admit(piece, piece)
+        auxiliaryPiece = piece
         val current = requireHandle()
         current.piecePriority(piece, Priority.TOP_PRIORITY)
         if (!current.havePiece(piece)) current.setPieceDeadline(piece, 0)
@@ -465,11 +499,21 @@ internal class NativeTorrent(
         ensureSelection(chosen)
         if (filePosition == chosen.video.file.size) return@synchronized
         val piece = ((chosen.video.torrentOffset + filePosition) / pieceLength).toInt()
+        val currentBeforeRotation = requireHandle()
+        if (!pausePrefetchRequested) {
+            clearPrefetch(currentBeforeRotation)
+            nextPrefetch = -1
+        }
         if (piece == lastDemand) return@synchronized
         val policy = cache ?: throw IOException("Rolling cache is not ready")
         checkDiskReserve()
         val lastPiece = ((chosen.video.torrentOffset + chosen.video.file.size - 1) / pieceLength).toInt()
         val end = policy.windowEnd(piece, lastPiece)
+        if (lastDemand >= 0 && piece != lastDemand + 1) {
+            clearPrefetch(currentBeforeRotation)
+            policy.redirectDemand(piece)
+            nextPrefetch = -1
+        }
         if (policy.needsEviction(piece, end)) {
             rotate(chosen, piece, lastPiece)
         }
@@ -478,7 +522,7 @@ internal class NativeTorrent(
         for (old in windowStart..windowEnd) {
             if (old >= 0 && (old < piece || old > end)) {
                 current.resetPieceDeadline(old)
-                current.piecePriority(old, Priority.IGNORE)
+                current.piecePriority(old, if (pausePrefetchRequested && old in prefetchStart..prefetchEnd) Priority.DEFAULT else Priority.IGNORE)
             }
         }
         for (next in piece..end) {
@@ -495,10 +539,16 @@ internal class NativeTorrent(
         lastDemand = piece
     }
 
-    private fun rotate(chosen: TorrentSelection, demand: Int, lastPiece: Int) {
+    private fun rotate(
+        chosen: TorrentSelection,
+        demand: Int,
+        lastPiece: Int,
+        admissionStart: Int = demand,
+        admissionEnd: Int = cache!!.windowEnd(demand, lastPiece),
+    ) {
         val policy = cache!!
         val firstPiece = (chosen.video.torrentOffset / pieceLength).toInt()
-        val keepStart = policy.retainedStart(demand, firstPiece)
+        val keepStart = policy.retainedStartForAdmission(demand, firstPiece, lastPiece, admissionStart, admissionEnd)
         val keepEnd = policy.retainedEnd(demand, lastPiece)
         val current = requireHandle()
         current.setFlags(TorrentFlags.UPLOAD_MODE)
@@ -547,6 +597,10 @@ internal class NativeTorrent(
             }
             resume.flags = resume.flags.and_(TorrentFlags.SEED_MODE.inv())
             policy.reset(keepStart, keepEnd)
+            verifiedAhead?.retain(keepStart, keepEnd)
+            prefetchStart = -1
+            prefetchEnd = -1
+            nextPrefetch = -1
             flushed.clear()
             windowStart = -1
             windowEnd = -1
@@ -575,6 +629,10 @@ internal class NativeTorrent(
         try {
             checkReadCancelled(cancelled)
             demand(chosen, position)
+            synchronized(lock) {
+                ensureSelection(chosen)
+                verifiedAhead?.moveReader(position)
+            }
             val piece = ((chosen.video.torrentOffset + position) / pieceLength).toInt()
             awaitReadable(chosen, piece, startedAt, cancelled)
             return synchronized(lock) {
@@ -584,6 +642,7 @@ internal class NativeTorrent(
                 input.seek(position)
                 val bytes = input.read(buffer, offset, count)
                 if (bytes < 0) throw EOFException("Verified torrent piece $piece is missing from disk at video byte $position")
+                verifiedAhead?.moveReader(position + bytes)
                 bytes
             }
         } finally {
@@ -648,6 +707,7 @@ internal class NativeTorrent(
                 if (verified && (!queued || written == total) && current.havePiece(piece)) {
                     flushed.set(piece)
                     selectedProgress?.record(piece)
+                    verifiedAhead?.record(piece)
                     return
                 }
                 val now = SystemClock.elapsedRealtime()
@@ -710,6 +770,58 @@ internal class NativeTorrent(
         requiredDataStatus = RequiredDataStatus.IDLE
     }
 
+    private fun clearPrefetch(current: TorrentHandle) {
+        for (piece in prefetchStart..prefetchEnd) {
+            if (piece >= 0 && piece !in windowStart..windowEnd && piece != auxiliaryPiece) {
+                current.resetPieceDeadline(piece)
+                current.piecePriority(piece, Priority.IGNORE)
+            }
+        }
+        prefetchStart = -1
+        prefetchEnd = -1
+    }
+
+    /** Called only by snapshot's IO monitor, with lock held; it never rotates storage. */
+    private fun maintainPausePrefetch(): String? {
+        val current = requireHandle()
+        if (!pausePrefetchRequested) {
+            clearPrefetch(current)
+            nextPrefetch = -1
+            return null
+        }
+        val chosen = selection ?: return "Waiting for video selection"
+        val policy = cache ?: return "Waiting for torrent metadata"
+        if (lastDemand < 0) return "Waiting for video reader"
+        val ahead = verifiedAhead ?: return "Waiting for video reader"
+        val lastPiece = ((chosen.video.torrentOffset + chosen.video.file.size - 1) / pieceLength).toInt()
+        if (prefetchStart >= 0) {
+            for (piece in prefetchStart..prefetchEnd) {
+                if (!current.havePiece(piece)) return "Prefetching ahead of reader"
+                ahead.record(piece)
+            }
+            nextPrefetch = prefetchEnd + 1
+            clearPrefetch(current)
+        }
+        // Re-enabling or seeking can reuse a long completed reserve in a word-wise scan,
+        // rather than issuing one JNI havePiece call for every already-cached piece.
+        val start = ahead.firstMissing(maxOf(windowEnd + 1, nextPrefetch))
+        nextPrefetch = start
+        if (start > lastPiece) {
+            return if (ahead.reachesEnd()) "End of video cached" else "Finishing ahead of reader"
+        }
+        val end = policy.prefetchEnd(start, lastPiece, pausePrefetchRequested)
+        if (end < start) return if (pausePrefetchRequested) "Cache full" else null
+        policy.admitPrefetch(lastDemand, start, end)
+        prefetchStart = start
+        prefetchEnd = end
+        for (piece in start..end) {
+            // No deadlines: the ordinary 8 MiB / 32-piece window and auxiliary reader
+            // keep TOP_PRIORITY and always win over this small speculative batch.
+            if (piece != auxiliaryPiece) current.piecePriority(piece, Priority.DEFAULT)
+        }
+        return "Prefetching ahead of reader"
+    }
+
     fun snapshot(): TorrentSnapshot = synchronized(lock) {
         checkUsable()
         val current = requireHandle()
@@ -721,9 +833,11 @@ internal class NativeTorrent(
             val done = selectedProgress?.downloadedBytes() ?: 0L
             val allocated = allocatedBytes()
             if (selection != null && allocated > cacheLimit) throw IOException("Torrent cache exceeded its disk limit")
+            val prefetchStatus = maintainPausePrefetch()
             TorrentSnapshot(
                 status.numPeers(), done, status.downloadPayloadRate().toLong().coerceAtLeast(0), allocated, cacheLimit,
                 requiredPieceIndex, requiredBlocksLoaded, requiredBlockCount, requiredWaitMillis, requiredDataStatus,
+                verifiedAhead?.bytesAhead() ?: 0L, prefetchStatus,
             )
         } finally {
             status.swig().delete()

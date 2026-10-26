@@ -39,6 +39,7 @@ import dev.lumastream.catalog.CatalogConfiguration
 import dev.lumastream.catalog.SUPPORTED_CATALOG_LANGUAGES
 import dev.lumastream.catalog.SUPPORTED_SUBTITLE_LANGUAGES
 import dev.lumastream.catalog.SUPPORTED_AUDIO_LANGUAGES
+import dev.lumastream.catalog.SUPPORTED_TORRENT_CACHE_GIB
 
 @Composable
 fun CatalogSettingsScreen(
@@ -56,6 +57,9 @@ fun CatalogSettingsScreen(
     var subtitleKey by remember(configuration) { mutableStateOf(configuration.openSubtitlesApiKey) }
     var torrentsDbEnabled by remember(configuration) { mutableStateOf(configuration.torrentsDbEnabled) }
     var mediaFusionEnabled by remember(configuration) { mutableStateOf(configuration.mediaFusionEnabled) }
+    var pausePrefetchEnabled by remember(configuration) { mutableStateOf(configuration.pausePrefetchEnabled) }
+    var torrentCacheGiB by remember(configuration) { mutableStateOf(configuration.torrentCacheGiB) }
+    var choosingCacheSize by remember { mutableStateOf(false) }
     var choosingLanguage by remember { mutableStateOf<String?>(null) }
     var validationError by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
@@ -66,6 +70,7 @@ fun CatalogSettingsScreen(
     val subtitleLanguageFocus = remember { FocusRequester() }
     val audioLanguageFocus = remember { FocusRequester() }
     val subtitleKeyFocus = remember { FocusRequester() }
+    val cacheSizeFocus = remember { FocusRequester() }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val buttonColors = ButtonDefaults.colors(
@@ -143,6 +148,37 @@ fun CatalogSettingsScreen(
             LaunchedEffect(Unit) { selectedFocus.requestFocus() }
         }
     }
+    if (choosingCacheSize) {
+        val selectedFocus = remember { FocusRequester() }
+        fun closeCacheSizes() {
+            choosingCacheSize = false
+            cacheSizeFocus.requestFocus()
+        }
+        Dialog(onDismissRequest = { closeCacheSizes() }) {
+            Column(
+                modifier = Modifier.fillMaxWidth().background(Color(0xFF1B2333)).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text("Torrent disk cache", color = Color.White, fontSize = 24.sp)
+                Text("Use Up / Down to choose, OK to select, or Back to cancel.", color = Color(0xFFBCC5D7))
+                SUPPORTED_TORRENT_CACHE_GIB.forEach { size ->
+                    Button(
+                        colors = buttonColors,
+                        onClick = {
+                            torrentCacheGiB = size
+                            closeCacheSizes()
+                        },
+                        modifier = Modifier.fillMaxWidth().then(
+                            if (size == torrentCacheGiB) Modifier.focusRequester(selectedFocus) else Modifier,
+                        ),
+                    ) {
+                        Text("$size GiB${if (size == torrentCacheGiB) " — selected" else ""}", color = Color.White)
+                    }
+                }
+            }
+            LaunchedEffect(Unit) { selectedFocus.requestFocus() }
+        }
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(Color(0xFF10131B)).padding(36.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -182,6 +218,33 @@ fun CatalogSettingsScreen(
         }
         item {
             Text("Enabled services receive the selected title/episode ID and see your network IP when sources are requested. Disabled additional services receive no requests. Only use content you are authorized to download and share. Results do not guarantee availability, playback, ownership or permission.", color = Color(0xFFBCC5D7))
+        }
+        item {
+            Text("Torrent cache and pause prefetch", color = Color.White, fontSize = 20.sp)
+            Text("When enabled, explicitly pausing playback downloads ahead of the video reader until the available disk cache is full. Save applies your choices; Back discards changes.", color = Color(0xFFBCC5D7))
+        }
+        item {
+            Button(
+                colors = buttonColors,
+                enabled = !saving,
+                onClick = { pausePrefetchEnabled = !pausePrefetchEnabled },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Prefetch while paused: ${if (pausePrefetchEnabled) "On" else "Off"}", color = Color.White)
+            }
+        }
+        item {
+            Button(
+                colors = buttonColors,
+                enabled = !saving,
+                onClick = { dismissInput(); choosingCacheSize = true },
+                modifier = Modifier.fillMaxWidth().focusRequester(cacheSizeFocus),
+            ) {
+                Text("Torrent disk cache: $torrentCacheGiB GiB", color = Color.White)
+            }
+        }
+        item {
+            Text("Keeps 1 GiB of storage free. The actual cache limit can be lower when less disk space is available. Cache size changes apply to the next opened source.", color = Color(0xFFBCC5D7))
         }
         item {
             Text("Choose the language for catalog titles, descriptions and episode information. This does not change playback audio or subtitles.", color = Color(0xFFBCC5D7))
@@ -226,6 +289,7 @@ fun CatalogSettingsScreen(
                         subtitleLanguage = subtitleLanguage, audioLanguage = audioLanguage,
                         openSubtitlesApiKey = subtitleKey,
                         torrentsDbEnabled = torrentsDbEnabled, mediaFusionEnabled = mediaFusionEnabled,
+                        pausePrefetchEnabled = pausePrefetchEnabled, torrentCacheGiB = torrentCacheGiB,
                     ).validated()
                     validationError = null
                     onSave(value)

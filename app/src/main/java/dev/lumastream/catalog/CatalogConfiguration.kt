@@ -15,6 +15,9 @@ private const val DEFAULT_PROVIDER = "https://torrentio.strem.fun/manifest.json"
 
 const val DEFAULT_CATALOG_LANGUAGE = "en-US"
 
+const val DEFAULT_TORRENT_CACHE_GIB = 4
+val SUPPORTED_TORRENT_CACHE_GIB: List<Int> = listOf(1, 2, 4, 8)
+
 data class CatalogLanguage(val code: String, val label: String)
 
 val SUPPORTED_CATALOG_LANGUAGES: List<CatalogLanguage> = listOf(
@@ -49,10 +52,15 @@ data class CatalogConfiguration(
     val openSubtitlesApiKey: String = "",
     val torrentsDbEnabled: Boolean = false,
     val mediaFusionEnabled: Boolean = false,
+    val pausePrefetchEnabled: Boolean = false,
+    val torrentCacheGiB: Int = DEFAULT_TORRENT_CACHE_GIB,
 ) {
     override fun toString(): String = "CatalogConfiguration(token=<redacted>, provider=<redacted>, openSubtitlesApiKey=<redacted>)"
 
     fun validated(): CatalogConfiguration {
+        require(torrentCacheGiB in SUPPORTED_TORRENT_CACHE_GIB) {
+            "Select a torrent disk cache size of 1, 2, 4 or 8 GiB."
+        }
         require(SUPPORTED_CATALOG_LANGUAGES.any { it.code == catalogLanguage }) {
             "Select a supported catalog language."
         }
@@ -121,6 +129,13 @@ class CatalogConfigurationStore(context: Context) {
 
 internal fun decodeCatalogConfiguration(text: String): CatalogConfiguration {
     val json = JSONObject(text)
+    val cacheGiB = if (json.has("torrentCacheGiB")) {
+        val value = json.get("torrentCacheGiB")
+        require(value is Int) { "Select a torrent disk cache size of 1, 2, 4 or 8 GiB." }
+        value
+    } else {
+        DEFAULT_TORRENT_CACHE_GIB
+    }
     return CatalogConfiguration(
         token = json.optString("token"),
         providerManifestUrl = json.optString("providerManifestUrl", DEFAULT_PROVIDER),
@@ -130,6 +145,8 @@ internal fun decodeCatalogConfiguration(text: String): CatalogConfiguration {
         openSubtitlesApiKey = json.optString("openSubtitlesApiKey"),
         torrentsDbEnabled = json.optBoolean("torrentsDbEnabled", false),
         mediaFusionEnabled = json.optBoolean("mediaFusionEnabled", false),
+        pausePrefetchEnabled = json.optBoolean("pausePrefetchEnabled", false),
+        torrentCacheGiB = cacheGiB,
     ).validated()
 }
 
@@ -142,6 +159,8 @@ internal fun encodeCatalogConfiguration(configuration: CatalogConfiguration): St
     .put("openSubtitlesApiKey", configuration.openSubtitlesApiKey)
     .put("torrentsDbEnabled", configuration.torrentsDbEnabled)
     .put("mediaFusionEnabled", configuration.mediaFusionEnabled)
+    .put("pausePrefetchEnabled", configuration.pausePrefetchEnabled)
+    .put("torrentCacheGiB", configuration.torrentCacheGiB)
     .toString()
 
 private fun java.io.InputStream.readBytesBounded(limit: Int): ByteArray {

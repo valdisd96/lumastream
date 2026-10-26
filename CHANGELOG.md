@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Added opt-in **Prefetch while paused**: selected-video data accumulates in bounded low-priority batches until the disk-cache budget is full or the video ends, without increasing Media3's RAM-buffer target.
+- Preserve the forward reserve on resume and nearby seeks; distant seeks redirect downloads. Required video and auxiliary reads retain priority, with whole-piece accounting and one piece of auxiliary headroom.
+- Added persisted **1 / 2 / 4 / 8 GiB** torrent-cache choices, defaulting to 4 GiB. Older settings keep their existing preferences and prefetch starts disabled; actual limits remain constrained by free space and the 1 GiB reserve.
+- Added paused prefetch status and contiguous verified **Ahead of reader** bytes, separate from cumulative downloads and playback-buffer seconds. Session cache still clears on exit.
+- Debug build, lint and all 156 JVM tests passed. An isolated WK03K native run filled a temporary 40 MiB cache with 33,218,868 bytes ahead of the reader, stopped at capacity, retained bytes after disabling prefetch, and verified a distant seek/backseek byte-for-byte without exceeding the limit.
+- Verified visible Sintel playback on WK03K: remote pause accumulated additional forward data, resume and a seek into missing data returned to advancing video, and normal stop removed the session cache. Remote settings verified the toggle, cache-size chooser and Save persistence in the isolated app; the installed signed release/data were unchanged.
+
 ## 0.5.1 — 2026-10-26 (pre-release)
 
 - Reworked source selection into independently scrolling provider/context and source columns, so notices and provider failures no longer consume the source list's height.

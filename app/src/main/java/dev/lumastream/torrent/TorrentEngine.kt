@@ -65,7 +65,11 @@ class TorrentEngine(context: Context) : Closeable {
     @Volatile private var closed = false
     @Volatile private var active: NativeTorrent? = null
 
-    suspend fun open(uri: Uri): Unit = coroutineScope {
+    fun setPausePrefetch(enabled: Boolean) {
+        active?.setPausePrefetch(enabled)
+    }
+
+    suspend fun open(uri: Uri, maximumCacheBytes: Long): Unit = coroutineScope {
         val job = currentCoroutineContext()[Job]!!
         var owned: NativeTorrent? = null
         val ticket = synchronized(requests) {
@@ -100,7 +104,7 @@ class TorrentEngine(context: Context) : Closeable {
                                     )
                                 }
                             }
-                        })
+                        }, maximumCacheBytes = maximumCacheBytes)
                         active = torrent
                         owned = torrent
                         try {
@@ -166,6 +170,8 @@ class TorrentEngine(context: Context) : Closeable {
                     requiredBlockCount = 0,
                     requiredWaitMillis = 0,
                     requiredDataStatus = RequiredDataStatus.IDLE,
+                    prefetchedBytes = 0,
+                    pausePrefetchStatus = null,
                     error = null,
                 )
                 Log.i(TORRENT_TAG, "Selection: index=$index, bytes=${selection.video.file.size}, offset=${selection.video.torrentOffset}")
@@ -290,6 +296,8 @@ class TorrentEngine(context: Context) : Closeable {
                             downloadBytesPerSecond = snapshot.downloadBytesPerSecond,
                             cacheBytes = snapshot.cacheBytes,
                             cacheLimitBytes = snapshot.cacheLimit,
+                            prefetchedBytes = snapshot.prefetchedBytes,
+                            pausePrefetchStatus = snapshot.pausePrefetchStatus,
                             requiredPieceIndex = snapshot.requiredPieceIndex,
                             requiredBlocksLoaded = snapshot.requiredBlocksLoaded,
                             requiredBlockCount = snapshot.requiredBlockCount,
