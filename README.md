@@ -4,13 +4,15 @@ An Android TV application for playing torrents before the download completes, in
 
 ## Download
 
-The latest signed preview is [v0.6.0](https://github.com/valdisd96/lumastream/releases/tag/v0.6.0). Download `lumastream-0.6.0-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
+The latest signed preview is [v0.7.0](https://github.com/valdisd96/lumastream/releases/tag/v0.7.0). Download `lumastream-0.7.0-universal.apk` and `SHA256SUMS` from its assets. One APK supports ARMv7 and ARM64 Android TV / Google TV devices on Android 9 / API 28 or later, including ARM64 systems with 16 KB memory pages. x86 devices and emulators are not supported. GitHub Packages is not used.
 
-Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.6.0-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.7.0-universal.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
 
 The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
 
-Version 0.6.0 has `versionCode=8` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. This update adds optional pause prefetch, configurable 1 / 2 / 4 / 8 GiB disk cache, and one history card per series while retaining individual episode resume points.
+Version 0.7.0 has `versionCode=9` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. This update adds universal ARM support, 16 KB native compatibility, and a fix for Settings dialog focus restoration.
+
+This is TV support, not a touch/portrait phone or tablet interface. ARMv7 playback was verified on WK03K; ARM64 playback was verified on a Google TV Android 16 emulator with actual 16 KB pages, not on a physical ARM64 TV. Codec and filesystem support still depend on the device.
 
 ## Current functionality
 
@@ -89,10 +91,11 @@ Verified on XGIMI MoGo 4 Laser (WK03K), Android TV 11 / API 30, `armeabi-v7a`, w
 
 - Kotlin 2.0.21 and Compose for TV.
 - AndroidX Media3 1.5.1 / ExoPlayer.
-- libtorrent4j 2.1.0-39, including the ARMv7 native library.
+- libtorrent4j 2.1.0-39, including the ARMv7 and ARM64 native libraries.
 - Gradle 8.9, Android Gradle Plugin 8.7.3, JDK 17.
 - Android NDK 27.0.12077973 and CMake 3.22.1 for the small sparse-storage JNI library.
-- Minimum Android API 28; compile/target API 35. This APK contains only ARMv7 native binaries, not emulator or ARM64-only builds.
+- Minimum Android API 28; compile/target API 35. Development APKs contain both ARMv7 and ARM64 native binaries. Android selects the matching ABI at installation.
+- NDK 27 flexible-page-size support builds the storage JNI library for 16 KB ARM64 pages. All packaged ARM64 libraries, including upstream libtorrent and AndroidX graphics, must have ELF LOAD alignment of at least 16 KB; CI checks native contents and APK alignment.
 
 ## Build and install
 
@@ -107,6 +110,9 @@ Set `JAVA_HOME` to your JDK 17 installation. Set `ANDROID_HOME` to your SDK dire
 ```sh
 ./gradlew assembleDebug lintDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+python3 scripts/verify-native-packaging.py app/build/outputs/apk/debug/app-debug.apk \
+  --readelf "$ANDROID_HOME/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-readelf" \
+  --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"
 adb shell am start -n dev.lumastream/.MainActivity
 ```
 
@@ -118,6 +124,8 @@ export ANDROID_HOME="$(brew --prefix)/share/android-commandlinetools"
 ```
 
 Use `adb -s DEVICE` if multiple devices are connected. Configure and authorize ADB on the TV first; never forward its port to the internet. `assembleDebug` produces debug-signed development builds, not the signed APK distributed through Releases. Debug keys from different machines are not interchangeable for in-place updates.
+
+The native checker example uses the macOS NDK host directory; use `linux-x86_64` on Linux. It rejects missing/extra ABIs, missing torrent/storage JNI libraries, ARM64 ELF alignment below 16 KB, and invalid 16 KB APK alignment.
 
 The Android GitHub Actions workflow builds and lints pull requests and `main`, and uploads a debug APK. No empty test suite is presented as behavioral verification.
 
@@ -131,16 +139,16 @@ With `JAVA_HOME` and `ANDROID_HOME` configured as above:
 ./gradlew assembleRelease testReleaseUnitTest lintRelease
 TOOLS="$ANDROID_HOME/build-tools/35.0.0"
 SIGNING="$HOME/.config/lumastream/signing"
-OUT=".local/release-v0.6.0"
+OUT=".local/release-v0.7.0"
 mkdir -p "$OUT"
-"$TOOLS/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$OUT/aligned.apk"
+"$TOOLS/zipalign" -P 16 -f 4 app/build/outputs/apk/release/app-release-unsigned.apk "$OUT/aligned.apk"
 "$TOOLS/apksigner" sign \
   --ks "$SIGNING/release.p12" --ks-key-alias lumastream \
   --ks-pass "file:$SIGNING/store-password" \
-  --out "$OUT/lumastream-0.6.0-armeabi-v7a.apk" "$OUT/aligned.apk"
-"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.6.0-armeabi-v7a.apk"
-"$TOOLS/zipalign" -c 4 "$OUT/lumastream-0.6.0-armeabi-v7a.apk"
-(cd "$OUT" && shasum -a 256 lumastream-0.6.0-armeabi-v7a.apk > SHA256SUMS)
+  --out "$OUT/lumastream-0.7.0-universal.apk" "$OUT/aligned.apk"
+"$TOOLS/apksigner" verify --verbose --print-certs "$OUT/lumastream-0.7.0-universal.apk"
+"$TOOLS/zipalign" -c -P 16 4 "$OUT/lumastream-0.7.0-universal.apk"
+(cd "$OUT" && shasum -a 256 lumastream-0.7.0-universal.apk > SHA256SUMS)
 ```
 
 Release certificate SHA-256: `c113d8eb54f1eb4cdfe327612236e7dbd7cedce27ab9235a4f4938ad01e35f70`.
@@ -154,6 +162,18 @@ For v0.2.0, `assembleRelease`, all 78 release unit tests and `lintRelease` passe
 Upgrade verification on WK03K used separately identified, non-debuggable 0.1.0 and 0.2.0 builds signed with the release key (`dev.lumastream.upgradesmoke`) to preserve the owner's debug installation. Installing 0.2.0 over 0.1.0 retained the exact configuration/history bytes, package UID and original installation time. The upgraded app loaded the test token/provider settings, Russian catalog language and Sintel resume position of 123000 ms; new subtitle/audio preferences initialized to English/Original. Actual resumed playback rendered its first frame at exactly 123000 ms with 4,330,136 of 129,241,752 bytes downloaded, advanced to 133007 ms and stopped normally with native shutdown. Screenshots verified the history card, settings, rendered video and updated progress. The temporary apps, runner and build override were removed. This verifies the release-mode upgrade/data path under an isolated application ID, not installation of the published package over the owner's incompatible debug signature; no new audible-output claim is made.
 
 For v0.1.0, `assembleRelease`, all 24 release unit tests and `lintRelease` passed. The distribution APK passed signature/alignment checks, contains only ARMv7 native libraries and bundled third-party notices, is not debuggable, and was checked for absence of the owner's private TMDB token. On WK03K, a separately built release-mode copy signed with the same key and temporary application ID `dev.lumastream.releasesmoke` exercised fresh Home, external Sintel input, video selection, actual video rendering, advancing playback and normal native-session shutdown. First frame arrived with 2,626,200 of 129,241,752 bytes downloaded; playback reached 29,261 ms before stopping. The temporary app was removed without replacing the owner's debug installation. This checks release-mode runtime behavior, not installation of the exact distribution APK over a differently signed app; no new audible-sound claim is made.
+
+### Universal APK verification (0.7.0)
+
+Debug and release builds, all **158 release unit tests** and release lint passed. The locally signed `lumastream-0.7.0-universal.apk` has package `dev.lumastream`, version code 9, minimum API 28, both ARM ABIs, and the existing release certificate. The native packaging checker passed on debug and signed release APKs; all packaged ARM64 ELF LOAD segments have `0x4000` alignment.
+
+On WK03K (ARMv7, Android 11, 4 KB pages), a separately identified debug build rendered Sintel with **1,184,408 / 129,241,752 bytes** downloaded and visibly advanced. Pause/resume worked; with prefetch enabled and a 1 GiB cache, the paused overlay's contiguous ahead bytes increased from **4.0 to 5.4 MiB**. A distant seek requested unavailable pieces and returned to advancing video at 314,581 ms. Home stopped the native session and left 8 KiB in cache. Reinstalling the isolated APK retained its seeded settings exactly. The isolated app was removed; the owner's installed release and data were not replaced.
+
+On the ARM64-only Google TV Android 16 / API 36 emulator (`google-tv-ps16k`, actual page size **16,384 bytes**), the signed release APK rendered Sintel with **1,053,336 / 129,241,752 bytes** downloaded. Pause/resume and a missing-piece seek recovered to READY at 312,386 ms and advanced past 320 seconds; Home stopped the native session. These are emulator results, not hardware ARM64 decoder or audible-output certification.
+
+The ARM64 check exposed a Settings crash when closing a cache-size dialog after its opener had been disposed by the lazy list. Cache-size and language dialogs now restore the opener's list item and wait for layout before requesting focus. The corrected signed APK passed cache selection/cancellation and catalog-language selection/cancellation, visibly restoring focus. Saving and reinstalling it retained prefetch On, 2 GiB cache and English. Its final playback rendered a first frame with **647,476 / 129,241,752 bytes** downloaded, advanced, and stopped normally. In the earlier ARM64 prefetch check, paused ahead-of-reader bytes grew from zero to 9.1 MiB. Private cache deletion was not directly measured on the non-debuggable ARM64 release; native shutdown was verified. The emulator was stopped after verification.
+
+The certificate and version-code checks support in-place signed-release updates; the isolated reinstall is not an older-release migration test. No new audible-output claim is made, and decoder/network/filesystem limitations still apply.
 
 ## Use with a remote
 
