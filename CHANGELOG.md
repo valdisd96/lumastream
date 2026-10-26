@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 — Unreleased
+## 0.7.0 — 2026-10-26 (pre-release)
 
 - Build a single universal Android TV / Google TV APK with ARMv7 and ARM64 native libraries, retaining Android 9 / API 28 as the minimum. Phone/tablet UI and x86 are not included.
 - Enable NDK flexible-page-size support for the storage JNI library; retain unmodified libtorrent4j 2.1.0-39 binaries for both ABIs.

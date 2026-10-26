@@ -4,15 +4,15 @@ An Android TV application for playing torrents before the download completes, in
 
 ## Download
 
-The latest signed preview is [v0.6.0](https://github.com/valdisd96/lumastream/releases/tag/v0.6.0). Download `lumastream-0.6.0-armeabi-v7a.apk` and `SHA256SUMS` from its assets. It requires Android TV 9 / API 28 or later with ARMv7 support; ARM64-only devices and x86 emulators are not supported. GitHub Packages is not used.
+The latest signed preview is [v0.7.0](https://github.com/valdisd96/lumastream/releases/tag/v0.7.0). Download `lumastream-0.7.0-universal.apk` and `SHA256SUMS` from its assets. One APK supports ARMv7 and ARM64 Android TV / Google TV devices on Android 9 / API 28 or later, including ARM64 systems with 16 KB memory pages. x86 devices and emulators are not supported. GitHub Packages is not used.
 
-Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.6.0-armeabi-v7a.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
+Verify the download with `shasum -a 256 -c SHA256SUMS`, then sideload with `adb -s DEVICE install -r lumastream-0.7.0-universal.apk`, or transfer it to the TV and use an APK installer with installation from that source enabled. Configure your own TMDB API Read Access Token in Settings; no token or media is bundled.
 
 The release certificate differs from development debug keys. Android cannot update a debug installation with this APK in place. Uninstalling the debug app removes its settings and watch history; do not uninstall it unless you accept that loss. Future release updates must retain the release signing key and increase `versionCode`.
 
-Version 0.6.0 has `versionCode=8` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. This update adds optional pause prefetch, configurable 1 / 2 / 4 / 8 GiB disk cache, and one history card per series while retaining individual episode resume points.
+Version 0.7.0 has `versionCode=9` and uses the same release certificate as earlier signed previews. Install it over an earlier signed release without uninstalling to retain app-private settings and history. This does not make a debug-to-release installation compatible. This update adds universal ARM support, 16 KB native compatibility, and a fix for Settings dialog focus restoration.
 
-The development build targets **0.7.0** (`versionCode=9`) and produces one universal **ARMv7 + ARM64** APK for Android TV / Google TV on Android 9 or later. The published 0.6.0 asset above remains ARMv7-only until a new release is published. This is TV support, not a touch/portrait phone or tablet interface; x86/x86_64 remain unsupported.
+This is TV support, not a touch/portrait phone or tablet interface. ARMv7 playback was verified on WK03K; ARM64 playback was verified on a Google TV Android 16 emulator with actual 16 KB pages, not on a physical ARM64 TV. Codec and filesystem support still depend on the device.
 
 ## Current functionality
 
@@ -163,7 +163,7 @@ Upgrade verification on WK03K used separately identified, non-debuggable 0.1.0 a
 
 For v0.1.0, `assembleRelease`, all 24 release unit tests and `lintRelease` passed. The distribution APK passed signature/alignment checks, contains only ARMv7 native libraries and bundled third-party notices, is not debuggable, and was checked for absence of the owner's private TMDB token. On WK03K, a separately built release-mode copy signed with the same key and temporary application ID `dev.lumastream.releasesmoke` exercised fresh Home, external Sintel input, video selection, actual video rendering, advancing playback and normal native-session shutdown. First frame arrived with 2,626,200 of 129,241,752 bytes downloaded; playback reached 29,261 ms before stopping. The temporary app was removed without replacing the owner's debug installation. This checks release-mode runtime behavior, not installation of the exact distribution APK over a differently signed app; no new audible-sound claim is made.
 
-### Universal APK verification (0.7.0 development)
+### Universal APK verification (0.7.0)
 
 Debug and release builds, all **158 release unit tests** and release lint passed. The locally signed `lumastream-0.7.0-universal.apk` has package `dev.lumastream`, version code 9, minimum API 28, both ARM ABIs, and the existing release certificate. The native packaging checker passed on debug and signed release APKs; all packaged ARM64 ELF LOAD segments have `0x4000` alignment.
 
