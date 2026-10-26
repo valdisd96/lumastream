@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Group History into one card per movie or series, using the most recently played episode and its exact resume position rather than displaying every episode separately. Stored episode progress and the existing 100-record bound are unchanged.
+- Keep history focus keyed by movie/series identity when the representative episode changes. Exact-episode history actions and Choose episode remain available.
+- Verified grouped cards, latest-episode dialog, retained episode data and focus restoration in an isolated WK03K app with synthetic history. Debug build, lint and all 149 JVM tests passed; no playback was started and the installed release/data were unchanged.
+
 ## 0.5.1 — 2026-10-26 (pre-release)
 
 - Reworked source selection into independently scrolling provider/context and source columns, so notices and provider failures no longer consume the source list's height.

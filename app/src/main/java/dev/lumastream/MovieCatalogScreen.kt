@@ -94,6 +94,7 @@ import dev.lumastream.catalog.findNextEpisode
 import dev.lumastream.catalog.rankAutomaticSources
 import dev.lumastream.history.WatchEntry
 import dev.lumastream.history.WatchLaterStore
+import dev.lumastream.history.historyCards
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
@@ -589,7 +590,7 @@ fun MovieCatalogScreen(
     var pendingResultFocus by remember { mutableStateOf<String?>(null) }
     var pendingHistoryFocus by remember { mutableStateOf<String?>(null) }
     val latestHistory = remember(history) {
-        history.sortedByDescending { it.updatedAtMs }.distinctBy { it.key }
+        historyCards(history)
     }
     var resumeEntry by remember { mutableStateOf<WatchEntry?>(null) }
     var choosingGenre by remember { mutableStateOf(false) }
@@ -676,8 +677,8 @@ fun MovieCatalogScreen(
             } else if (state.section == CatalogSection.HISTORY && latestHistory.isNotEmpty()) {
                 val index = (saved?.index ?: 0).coerceIn(0, latestHistory.lastIndex)
                 historyScroll.scrollToItem(index, saved?.offset ?: 0)
-                pendingHistoryFocus = saved?.focused?.takeIf { key -> latestHistory.any { it.key == key } }
-                    ?: latestHistory[index].key
+                pendingHistoryFocus = saved?.focused?.takeIf { key -> latestHistory.any { it.titleKey == key } }
+                    ?: latestHistory[index].titleKey
                 homeFocusPending = false
             }
         }
@@ -691,15 +692,15 @@ fun MovieCatalogScreen(
 
     fun rememberHistory(entry: WatchEntry) {
         model.saveViewport(listKey, CatalogViewport(
-            historyScroll.firstVisibleItemIndex, historyScroll.firstVisibleItemScrollOffset, entry.key,
+            historyScroll.firstVisibleItemIndex, historyScroll.firstVisibleItemScrollOffset, entry.titleKey,
         ))
     }
 
     fun closeHistoryDialog() {
         resumeEntry = null
         val saved = model.viewports[listKey]
-        pendingHistoryFocus = saved?.focused?.takeIf { key -> latestHistory.any { it.key == key } }
-            ?: latestHistory.getOrNull((saved?.index ?: 0).coerceAtMost((latestHistory.size - 1).coerceAtLeast(0)))?.key
+        pendingHistoryFocus = saved?.focused?.takeIf { key -> latestHistory.any { it.titleKey == key } }
+            ?: latestHistory.getOrNull((saved?.index ?: 0).coerceAtMost((latestHistory.size - 1).coerceAtLeast(0)))?.titleKey
         homeFocusPending = latestHistory.isEmpty()
     }
 
@@ -1084,10 +1085,10 @@ private fun CatalogHistoryRow(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
             ) {
-                items(entries, key = { it.key }) { entry ->
+                items(entries, key = { it.titleKey }) { entry ->
                     val requester = remember { FocusRequester() }
                     LaunchedEffect(pendingFocus) {
-                        if (pendingFocus == entry.key) {
+                        if (pendingFocus == entry.titleKey) {
                             val index = scroll.firstVisibleItemIndex
                             val offset = scroll.firstVisibleItemScrollOffset
                             withFrameNanos { }
@@ -1162,7 +1163,7 @@ private fun CatalogResumeDialog(
                         color = CatalogAccent, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 item {
-                    Text("History changes below affect only this episode, not the whole series.",
+                    Text("Most recently played episode. History changes below affect only this episode, not the whole series.",
                         color = CatalogMuted, fontSize = 14.sp)
                 }
             }
