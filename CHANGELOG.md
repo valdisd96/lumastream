@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make TMDB catalog and OpenSubtitles search optional and off on fresh installations; retain configured legacy integrations and preserve credentials when disabled. Disabled TMDB makes no metadata or artwork requests, including saved library cards.
+- Restore direct magnet/HTTPS torrent input and document selection from Home without accounts. Keep Archive, saved titles and history accessible; cached history sources can resume without TMDB. Hide online subtitle search when disabled while retaining embedded, torrent and imported subtitles.
+
 - Refresh the English README with a user-friendly introduction, setup guidance and an attributed screenshot gallery; separate detailed engineering and verification records into the maintainer guide.
 - Add reader-focused 0.8.0 release notes and concise conventions for future release descriptions. This is a documentation-only refresh; published APKs, checksums and signing are unchanged.
 

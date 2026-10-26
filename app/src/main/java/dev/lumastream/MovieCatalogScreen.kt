@@ -273,7 +273,7 @@ private class MovieCatalogViewModel(context: Context) : ViewModel() {
         if (configuration == value) return
         cancel()
         configuration = value
-        catalog = value.token.takeIf { it.isNotBlank() }?.let { TmdbCatalog(it, value.catalogLanguage) }
+        catalog = if (value.isCatalogConfigured) TmdbCatalog(value.token, value.catalogLanguage) else null
         provider = MultiSourceProviders(value)
         viewports.clear()
         mutableState.value = MovieCatalogState(focusEpoch = state.value.focusEpoch + 1)
@@ -373,16 +373,14 @@ private class MovieCatalogViewModel(context: Context) : ViewModel() {
     }
 
     private fun loadDetails() {
-        val client = catalog ?: run {
-            mutableState.update { it.copy(error = "Connect TMDB in Settings to load current details and find sources.") }
-            return
-        }
+        val client = catalog ?: return
         val current = state.value
         val title = current.selected ?: return
         load { current.copy(details = client.details(title)) }
     }
 
     fun selectSeason(number: Int) {
+        if (catalog == null) return
         cancel()
         mutableState.update {
             it.copy(route = CatalogRoute.EPISODES, season = number, episodes = emptyList(), episodesLoaded = false,
@@ -446,9 +444,9 @@ private class MovieCatalogViewModel(context: Context) : ViewModel() {
         val current = state.value
         val title = current.selected ?: return
         val episode = current.episode ?: return
+        val client = catalog ?: return
         mutableState.update { it.copy(nextEpisodeAbsent = false) }
         load(afterLoad = { if (state.value.route == CatalogRoute.SOURCES) loadSources() }) {
-            val client = catalog ?: error("Configure a TMDB API read access token to find the next episode.")
             val details = client.details(title)
             val next = findNextEpisode(details, episode) { client.episodes(details, it) }
             if (next == null) {
@@ -548,6 +546,7 @@ fun MovieCatalogScreen(
     onSetHistoryCompleted: (WatchEntry, Boolean) -> Unit,
     onConfigure: () -> Unit,
     onArchive: () -> Unit,
+    onOpenTorrent: () -> Unit,
     onBack: () -> Unit,
     onOpenSource: (CatalogSelection) -> Unit,
     onAutoSources: (List<CatalogSelection>) -> Unit,
@@ -566,6 +565,7 @@ fun MovieCatalogScreen(
     })
     val state by model.state.collectAsStateWithLifecycle()
     val watchLater by model.watchLater.collectAsStateWithLifecycle()
+    val catalogConfigured = configuration.isCatalogConfigured
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -747,6 +747,7 @@ fun MovieCatalogScreen(
     resumeEntry?.let { entry ->
         CatalogResumeDialog(
             entry = entry,
+            catalogConfigured = catalogConfigured,
             onDismiss = ::closeHistoryDialog,
             onResume = { startOver ->
                 resumeEntry = null
@@ -759,8 +760,12 @@ fun MovieCatalogScreen(
             },
             onChooseEpisode = {
                 resumeEntry = null
-                dismissInput()
-                model.select(entry.selection.details.title)
+                if (catalogConfigured) {
+                    dismissInput()
+                    model.select(entry.selection.details.title)
+                } else {
+                    leave(onConfigure)
+                }
             },
             onRemove = {
                 onRemoveHistory(entry)
@@ -834,11 +839,17 @@ fun MovieCatalogScreen(
                 }
                 if (state.route == CatalogRoute.RESULTS &&
                     state.section !in listOf(CatalogSection.HOME, CatalogSection.SEARCH)) {
-                    CatalogButton("Search", Modifier.focusRequester(searchFocus)) {
-                        model.openSection(CatalogSection.SEARCH)
+                    CatalogButton(
+                        if (catalogConfigured) "Search" else "Open magnet / torrent",
+                        Modifier.focusRequester(searchFocus),
+                    ) {
+                        if (catalogConfigured) model.openSection(CatalogSection.SEARCH) else leave(onOpenTorrent)
                     }
                 }
                 CatalogButton("Archive") { leave(onArchive) }
+                if ((catalogConfigured && state.section != CatalogSection.HOME) || state.route != CatalogRoute.RESULTS) {
+                    CatalogButton("Open magnet / torrent") { leave(onOpenTorrent) }
+                }
                 CatalogButton("Settings") { leave(onConfigure) }
             }
         }
@@ -865,7 +876,7 @@ fun MovieCatalogScreen(
                     contentPadding = PaddingValues(4.dp),
                 ) {
                     item(key = "header", span = { GridItemSpan(maxLineSpan) }) { header() }
-                    if (state.section == CatalogSection.HOME || state.section == CatalogSection.SEARCH) {
+                    if (catalogConfigured && (state.section == CatalogSection.HOME || state.section == CatalogSection.SEARCH)) {
                         item(key = "search", span = { GridItemSpan(maxLineSpan) }) {
                             Column(
                                 Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
@@ -892,14 +903,14 @@ fun MovieCatalogScreen(
                                         ),
                                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                                         keyboardActions = KeyboardActions(onSearch = {
-                                            if (configuration.token.isBlank()) leave(onConfigure) else search()
+                                            search()
                                         }),
                                     )
                                     CatalogButton(
-                                        if (configuration.token.isBlank()) "Connect TMDB" else "Search",
-                                        enabled = configuration.token.isBlank() || state.query.isNotBlank(),
+                                        "Search",
+                                        enabled = state.query.isNotBlank(),
                                     ) {
-                                        if (configuration.token.isBlank()) leave(onConfigure) else search()
+                                        search()
                                     }
                                     if (layout.isTv) LaunchedEffect(Unit) {
                                         withFrameNanos { }
@@ -909,7 +920,7 @@ fun MovieCatalogScreen(
                                 } else {
                                     AppButton(
                                         onClick = {
-                                            if (configuration.token.isBlank()) leave(onConfigure) else editingQuery = true
+                                            editingQuery = true
                                         },
                                         modifier = Modifier.fillMaxWidth().focusRequester(searchFocus),
                                     ) {
@@ -926,9 +937,7 @@ fun MovieCatalogScreen(
                                         }
                                     }
                                 }
-                                if (configuration.token.isBlank()) {
-                                    Text("Connect TMDB in Settings to search and discover.", color = CatalogMuted, fontSize = 14.sp)
-                                } else if (state.section == CatalogSection.SEARCH) {
+                                if (state.section == CatalogSection.SEARCH) {
                                     FlowRow(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -952,9 +961,37 @@ fun MovieCatalogScreen(
                     }
                     if (state.section == CatalogSection.HOME) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
-                            CatalogButton("Discover · Popular, top rated & genres", Modifier.fillMaxWidth()) {
-                                if (configuration.token.isBlank()) leave(onConfigure)
-                                else model.openSection(CatalogSection.DISCOVERY)
+                            Column(
+                                Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                if (!catalogConfigured) {
+                                    Text("What will you watch?", color = Color.White, fontSize = 28.sp)
+                                    Text("Open a magnet link or torrent, browse Archive, or continue from History. No catalog account is needed.",
+                                        color = CatalogMuted, fontSize = 16.sp)
+                                }
+                                CatalogButton(
+                                    "Open magnet / torrent",
+                                    Modifier.fillMaxWidth().then(
+                                        if (!catalogConfigured) Modifier.focusRequester(searchFocus) else Modifier,
+                                    ),
+                                ) { leave(onOpenTorrent) }
+                                if (!catalogConfigured) {
+                                    LaunchedEffect(homeFocusPending, state.focusEpoch, windowFocused) {
+                                        if (layout.isTv && windowFocused && homeFocusPending && resumeEntry == null) {
+                                            withFrameNanos { }
+                                            searchFocus.requestFocus()
+                                            homeFocusPending = false
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (catalogConfigured) {
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                CatalogButton("Discover · Popular, top rated & genres", Modifier.fillMaxWidth()) {
+                                    model.openSection(CatalogSection.DISCOVERY)
+                                }
                             }
                         }
                         item(span = { GridItemSpan(maxLineSpan) }) {
@@ -968,11 +1005,19 @@ fun MovieCatalogScreen(
                             }
                         }
                         item(span = { GridItemSpan(maxLineSpan) }) {
-                            Text("Movie and series metadata by TMDB. Availability and rights are separate.",
-                                color = CatalogMuted, fontSize = 13.sp)
+                            if (catalogConfigured) {
+                                Text("Movie and series metadata by TMDB. Availability and rights are separate.",
+                                    color = CatalogMuted, fontSize = 13.sp)
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Optional: connect TMDB for movie and series search, discovery and artwork.",
+                                        color = CatalogMuted, fontSize = 14.sp)
+                                    CatalogButton("Connect catalog") { leave(onConfigure) }
+                                }
+                            }
                         }
                     }
-                    if (state.section == CatalogSection.DISCOVERY) {
+                    if (catalogConfigured && state.section == CatalogSection.DISCOVERY) {
                         item(span = { GridItemSpan(maxLineSpan) }) {
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1062,7 +1107,7 @@ fun MovieCatalogScreen(
                                 Modifier.focusRequester(requester).onFocusChanged { if (it.isFocused) saveViewport() },
                                 onClick = { saveViewport(); model.select(title) },
                             ) {
-                                CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
+                                CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title, catalogConfigured,
                                     Modifier.fillMaxWidth().aspectRatio(2f / 3f))
                                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(title.title, color = Color.White, fontSize = 17.sp, lineHeight = 20.sp,
@@ -1105,7 +1150,7 @@ fun MovieCatalogScreen(
                                 }
                             }
                             CatalogHistoryTile(
-                                entry, Modifier.focusRequester(requester)
+                                entry, catalogConfigured, Modifier.focusRequester(requester)
                                     .onFocusChanged { if (it.isFocused) rememberHistory(entry) },
                             ) {
                                 rememberHistory(entry)
@@ -1118,10 +1163,12 @@ fun MovieCatalogScreen(
                     state, model::retry, model::findSources, model::selectSeason,
                     watchLater, model::loadWatchLater, model::toggleWatchLater, header,
                     rememberCatalogScroll(model, routeKey, ready = !state.loading),
+                    catalogConfigured, { leave(onConfigure) },
                 )
                 CatalogRoute.EPISODES -> CatalogEpisodesContent(
                     state, model::retry, model::findSources, header,
                     rememberCatalogScroll(model, routeKey, ready = !state.loading),
+                    catalogConfigured,
                 )
                 CatalogRoute.NEXT_EPISODE -> LazyColumn(
                     state = rememberCatalogScroll(model, routeKey),
@@ -1130,8 +1177,13 @@ fun MovieCatalogScreen(
                     item { header() }
                     item { CatalogReadable(state.selected?.title.orEmpty(), heading = true) }
                     item { CatalogReadable("After S${state.episode?.season} E${state.episode?.number} · ${state.episode?.title.orEmpty()}") }
-                    item { CatalogStatus(state, model::retry) }
-                    if (state.nextEpisodeAbsent && !state.loading && state.error == null) {
+                    if (catalogConfigured) {
+                        item { CatalogStatus(state, model::retry) }
+                    } else {
+                        item { CatalogReadable("Connect the optional catalog to look up the next episode. Saved playback remains available in History.") }
+                        item { CatalogButton("Connect catalog") { leave(onConfigure) } }
+                    }
+                    if (catalogConfigured && state.nextEpisodeAbsent && !state.loading && state.error == null) {
                         item { CatalogReadable("No next episode is listed by TMDB. Specials stay within Season 0; regular seasons follow episode numbering.") }
                         item { CatalogButton("Refresh episodes", onClick = model::retry) }
                     }
@@ -1140,6 +1192,7 @@ fun MovieCatalogScreen(
                     state, model::retry, header,
                     rememberCatalogScroll(model, routeKey, ready = !state.loading),
                     rememberCatalogScroll(model, "$routeKey:context", ready = !state.loading),
+                    catalogConfigured,
                     automatic = { sources ->
                         val selections = sources.mapNotNull { model.selection(it, configuration) }
                         if (selections.size == sources.size && selections.isNotEmpty()) {
@@ -1183,10 +1236,10 @@ private fun rememberCatalogScroll(
 }
 
 @Composable
-private fun CatalogHistoryTile(entry: WatchEntry, modifier: Modifier, select: () -> Unit) {
+private fun CatalogHistoryTile(entry: WatchEntry, catalogConfigured: Boolean, modifier: Modifier, select: () -> Unit) {
     val title = entry.selection.details.title
     CatalogTile(modifier, onClick = select) {
-        CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
+        CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title, catalogConfigured,
             Modifier.fillMaxWidth().aspectRatio(2f / 3f))
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title.title, color = Color.White, fontSize = 16.sp, lineHeight = 18.sp,
@@ -1212,6 +1265,7 @@ private fun CatalogHistoryTile(entry: WatchEntry, modifier: Modifier, select: ()
 @Composable
 private fun CatalogResumeDialog(
     entry: WatchEntry,
+    catalogConfigured: Boolean,
     onDismiss: () -> Unit,
     onResume: (Boolean) -> Unit,
     onChooseSource: () -> Unit,
@@ -1251,7 +1305,12 @@ private fun CatalogResumeDialog(
                 }
             }
             if (entry.selection.details.title.kind == MediaKind.SERIES) {
-                item { CatalogButton("Choose episode", Modifier.fillMaxWidth(), onClick = onChooseEpisode) }
+                item {
+                    CatalogButton(
+                        if (catalogConfigured) "Choose episode" else "Connect catalog to choose episode",
+                        Modifier.fillMaxWidth(), onClick = onChooseEpisode,
+                    )
+                }
             }
             item {
                 CatalogButton("Start from beginning", Modifier.fillMaxWidth().then(
@@ -1321,6 +1380,8 @@ private fun CatalogDetailsContent(
     toggleWatchLater: (CatalogTitle) -> Unit,
     header: @Composable () -> Unit,
     scroll: LazyListState,
+    catalogConfigured: Boolean,
+    onConfigure: () -> Unit,
 ) {
     val title = state.details?.title ?: state.selected ?: return
     val layout = LocalAppLayout.current
@@ -1328,10 +1389,11 @@ private fun CatalogDetailsContent(
         item { header() }
         item {
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))) {
-                CatalogImage(title.backdropPath, CatalogImageType.BACKDROP, "${title.title} backdrop", Modifier.matchParentSize())
+                CatalogImage(title.backdropPath, CatalogImageType.BACKDROP, "${title.title} backdrop",
+                    catalogConfigured, Modifier.matchParentSize())
                 Box(Modifier.matchParentSize().background(Brush.horizontalGradient(listOf(Color(0xF010131B), Color(0xB010131B)))))
                 Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
+                    CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title, catalogConfigured,
                         Modifier.width(if (layout.compact) 72.dp else 125.dp).aspectRatio(2f / 3f))
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(title.title, color = Color.White, fontSize = 27.sp)
@@ -1340,7 +1402,12 @@ private fun CatalogDetailsContent(
                 }
             }
         }
-        item { CatalogStatus(state, retry) }
+        if (catalogConfigured) {
+            item { CatalogStatus(state, retry) }
+        } else {
+            item { CatalogReadable("Saved title. Catalog metadata and artwork are off. Connect the catalog only if you want current details and episode browsing.") }
+            item { CatalogButton("Connect catalog", onClick = onConfigure) }
+        }
         item { WatchLaterStatus(watchLater, retryWatchLater) }
         item {
             CatalogButton(
@@ -1353,7 +1420,7 @@ private fun CatalogDetailsContent(
         if (title.originalTitle.isNotBlank() && title.originalTitle != title.title) {
             item { CatalogReadable("Original title: ${title.originalTitle}") }
         }
-        if (state.details != null) {
+        if (catalogConfigured && state.details != null) {
             if (title.kind == MediaKind.MOVIE) {
                 item { CatalogButton("Find sources", Modifier.fillMaxWidth()) { sources(null) } }
             } else {
@@ -1376,6 +1443,7 @@ private fun CatalogEpisodesContent(
     select: (CatalogEpisode) -> Unit,
     header: @Composable () -> Unit,
     scroll: LazyListState,
+    catalogConfigured: Boolean,
 ) {
     val layout = LocalAppLayout.current
     LazyColumn(state = scroll, verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -1390,7 +1458,7 @@ private fun CatalogEpisodesContent(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    CatalogImage(episode.stillPath, CatalogImageType.STILL, episode.title,
+                    CatalogImage(episode.stillPath, CatalogImageType.STILL, episode.title, catalogConfigured,
                         Modifier.widthIn(max = 190.dp).fillMaxWidth().aspectRatio(16f / 9f))
                     Column(
                         if (layout.compact) Modifier.fillMaxWidth() else Modifier.weight(1f),
@@ -1413,6 +1481,7 @@ private fun CatalogSourcesContent(
     header: @Composable () -> Unit,
     sourceScroll: LazyListState,
     contextScroll: LazyListState,
+    catalogConfigured: Boolean,
     automatic: (List<CatalogSource>) -> Unit,
     select: (CatalogSource) -> Unit,
 ) {
@@ -1480,7 +1549,7 @@ private fun CatalogSourcesContent(
             item(key = "header") { header() }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title,
+                    CatalogImage(title.posterPath, CatalogImageType.POSTER, title.title, catalogConfigured,
                         Modifier.width(52.dp).aspectRatio(2f / 3f))
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(title.title, color = Color.White, fontSize = 22.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)

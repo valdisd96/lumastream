@@ -68,6 +68,8 @@ fun CatalogSettingsScreen(
     var subtitleLanguage by rememberSaveable(configuration.subtitleLanguage) { mutableStateOf(configuration.subtitleLanguage) }
     var audioLanguage by rememberSaveable(configuration.audioLanguage) { mutableStateOf(configuration.audioLanguage) }
     var subtitleKey by remember(configuration) { mutableStateOf(configuration.openSubtitlesApiKey) }
+    var catalogEnabled by rememberSaveable(configuration.catalogEnabled) { mutableStateOf(configuration.catalogEnabled) }
+    var onlineSubtitlesEnabled by rememberSaveable(configuration.onlineSubtitlesEnabled) { mutableStateOf(configuration.onlineSubtitlesEnabled) }
     var torrentsDbEnabled by rememberSaveable(configuration.torrentsDbEnabled) { mutableStateOf(configuration.torrentsDbEnabled) }
     var mediaFusionEnabled by rememberSaveable(configuration.mediaFusionEnabled) { mutableStateOf(configuration.mediaFusionEnabled) }
     var pausePrefetchEnabled by rememberSaveable(configuration.pausePrefetchEnabled) { mutableStateOf(configuration.pausePrefetchEnabled) }
@@ -239,11 +241,32 @@ fun CatalogSettingsScreen(
                 Text("Back to catalog", color = Color.White)
             }
         }
-        Column {
+        Text("Optional services", color = Color.White, fontSize = 20.sp)
+        Text(
+            "Catalog and online subtitles are optional. Off makes no requests to that service and keeps its saved credentials for later. Local playback, embedded subtitles and audio preferences remain available. Save applies changes; Back discards them.",
+            color = Color(0xFFBCC5D7),
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppButton(enabled = !saving, selected = !catalogEnabled, onClick = { catalogEnabled = false }) {
+                Text("Catalog: Off", color = Color.White)
+            }
+            AppButton(enabled = !saving, selected = catalogEnabled, onClick = { catalogEnabled = true }) {
+                Text("Catalog: TMDB", color = Color.White)
+            }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppButton(enabled = !saving, selected = !onlineSubtitlesEnabled, onClick = { onlineSubtitlesEnabled = false }) {
+                Text("Online subtitles: Off", color = Color.White)
+            }
+            AppButton(enabled = !saving, selected = onlineSubtitlesEnabled, onClick = { onlineSubtitlesEnabled = true }) {
+                Text("Online subtitles: OpenSubtitles", color = Color.White)
+            }
+        }
+        if (catalogEnabled) Column {
             Text("Additional source providers (optional)", color = Color.White, fontSize = 20.sp)
             Text("Your configured primary provider remains active. Select additional services below; Save applies your choices. Back leaves settings unchanged.", color = Color(0xFFBCC5D7))
         }
-        Column {
+        if (catalogEnabled) Column {
             AppButton(
                 enabled = !saving,
                 onClick = { torrentsDbEnabled = !torrentsDbEnabled },
@@ -252,7 +275,7 @@ fun CatalogSettingsScreen(
                 Text("TorrentsDB: ${if (torrentsDbEnabled) "On" else "Off"} · torrentsdb.com", color = Color.White)
             }
         }
-        Column {
+        if (catalogEnabled) Column {
             AppButton(
                 enabled = !saving,
                 onClick = { mediaFusionEnabled = !mediaFusionEnabled },
@@ -264,7 +287,7 @@ fun CatalogSettingsScreen(
                 }
             }
         }
-        Column {
+        if (catalogEnabled) Column {
             Text("Enabled services receive the selected title/episode ID and see your network IP when sources are requested. Disabled additional services receive no requests. Only use content you are authorized to download and share. Results do not guarantee availability, playback, ownership or permission.", color = Color(0xFFBCC5D7))
         }
         Column {
@@ -292,10 +315,10 @@ fun CatalogSettingsScreen(
         Column {
             Text("Keeps 1 GiB of storage free. The actual cache limit can be lower when less disk space is available. Cache size changes apply to the next opened source.", color = Color(0xFFBCC5D7))
         }
-        Column {
+        if (catalogEnabled) Column {
             Text("Choose the language for catalog titles, descriptions and episode information. This does not change playback audio or subtitles.", color = Color(0xFFBCC5D7))
         }
-        Column {
+        if (catalogEnabled) Column {
             AppButton(
                 onClick = { dismissInput(); choosingLanguage = "Catalog" },
                 modifier = Modifier.focusRequester(languageFocus),
@@ -331,6 +354,7 @@ fun CatalogSettingsScreen(
                         token = token, providerManifestUrl = provider, catalogLanguage = catalogLanguage,
                         subtitleLanguage = subtitleLanguage, audioLanguage = audioLanguage,
                         openSubtitlesApiKey = subtitleKey,
+                        catalogEnabled = catalogEnabled, onlineSubtitlesEnabled = onlineSubtitlesEnabled,
                         torrentsDbEnabled = torrentsDbEnabled, mediaFusionEnabled = mediaFusionEnabled,
                         pausePrefetchEnabled = pausePrefetchEnabled, torrentCacheGiB = torrentCacheGiB,
                     ).validated()
@@ -342,10 +366,10 @@ fun CatalogSettingsScreen(
             }) { Text(if (saving) "Saving…" else "Save settings", color = Color.White) }
             (validationError ?: error)?.let { Text(it, color = Color(0xFFFFA6A6)) }
         }
-        Column {
+        if (catalogEnabled) Column {
             Text("TMDB provides film and series information, not playable video. Enter your API Read Access Token from your TMDB account. Credentials are stored only in this app's private storage, never in the APK or logs.", color = Color(0xFFBCC5D7))
         }
-        Column {
+        if (catalogEnabled) Column {
             OutlinedTextField(
                 value = token, onValueChange = { if (it.length <= 4096) token = it },
                 label = { Text("TMDB API Read Access Token") }, singleLine = true,
@@ -354,16 +378,16 @@ fun CatalogSettingsScreen(
                 modifier = Modifier.fillMaxWidth().focusRequester(tokenFocus).onFocusChanged { editing = it.isFocused },
             )
         }
-        Column {
+        if (catalogEnabled) Column {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 AppButton(onClick = { tokenFocus.requestFocus(); keyboard?.show() }) { Text("Edit token", color = Color.White) }
                 AppButton(onClick = { token = "" }) { Text("Clear token", color = Color.White) }
             }
         }
-        Column {
-            Text("OpenSubtitles search runs only when you press the search button in the subtitle menu. Private developer setup: configure LumaStream's application consumer key with anonymous downloads enabled, not a separate key for each viewer. No OpenSubtitles account password is needed. The key stays in app-private storage. Search sends the title, episode and release information to OpenSubtitles, which also sees your network IP. Provider quotas, availability and terms apply; a matching result does not guarantee correct timing or permission to use it.", color = Color(0xFFBCC5D7))
+        if (onlineSubtitlesEnabled) Column {
+            Text("OpenSubtitles search runs only when you press the search button in the subtitle menu. Application-provider setup: your app provider supplies LumaStream's application consumer key with anonymous downloads enabled. Viewers do not need to register their own API application or enter an OpenSubtitles account password. The key stays in app-private storage. Search sends the title, episode and release information to OpenSubtitles, which also sees your network IP. Provider quotas, availability and terms apply; a matching result does not guarantee correct timing or permission to use it.", color = Color(0xFFBCC5D7))
         }
-        Column {
+        if (onlineSubtitlesEnabled) Column {
             OutlinedTextField(
                 value = subtitleKey, onValueChange = { if (it.length <= 512) subtitleKey = it },
                 label = { Text("OpenSubtitles consumer key") }, singleLine = true,
@@ -372,16 +396,16 @@ fun CatalogSettingsScreen(
                 modifier = Modifier.fillMaxWidth().focusRequester(subtitleKeyFocus).onFocusChanged { editing = it.isFocused },
             )
         }
-        Column {
+        if (onlineSubtitlesEnabled) Column {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 AppButton(onClick = { subtitleKeyFocus.requestFocus(); keyboard?.show() }) { Text("Edit subtitle key", color = Color.White) }
                 AppButton(onClick = { subtitleKey = "" }) { Text("Clear subtitle key", color = Color.White) }
             }
         }
-        Column {
+        if (catalogEnabled) Column {
             Text("Source provider: HTTPS Stremio manifest URL. Torrentio is the initial provider. Requests send the selected IMDb title/episode ID and expose your network IP to that service. Returned torrents are third-party suggestions, not verified ownership, availability or permission. Only open content you are authorized to download and share.", color = Color(0xFFBCC5D7))
         }
-        Column {
+        if (catalogEnabled) Column {
             OutlinedTextField(
                 value = provider, onValueChange = { if (it.length <= 4096) provider = it },
                 label = { Text("Provider manifest URL") }, singleLine = true,
@@ -390,8 +414,8 @@ fun CatalogSettingsScreen(
                 modifier = Modifier.fillMaxWidth().focusRequester(providerFocus).onFocusChanged { editing = it.isFocused },
             )
         }
-        AppButton(onClick = { providerFocus.requestFocus(); keyboard?.show() }) { Text("Edit provider", color = Color.White) }
-        Column {
+        if (catalogEnabled) AppButton(onClick = { providerFocus.requestFocus(); keyboard?.show() }) { Text("Edit provider", color = Color.White) }
+        if (catalogEnabled) Column {
             TmdbAttributionLogo(Modifier.width(160.dp).height(28.dp))
             Text("This product uses the TMDB API but is not endorsed or certified by TMDB.", color = Color(0xFFBCC5D7))
             Text("TMDB: https://www.themoviedb.org · https://www.themoviedb.org/api-terms-of-use", color = Color(0xFFBCC5D7), fontSize = 13.sp)

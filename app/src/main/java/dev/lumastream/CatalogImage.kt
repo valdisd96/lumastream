@@ -79,16 +79,24 @@ private object CatalogImages {
 }
 
 @Composable
-fun CatalogImage(path: String?, type: CatalogImageType, description: String, modifier: Modifier = Modifier) {
+fun CatalogImage(
+    path: String?,
+    type: CatalogImageType,
+    description: String,
+    remoteRequestsEnabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
-    val url = remember(path, type) {
-        path?.takeIf { IMAGE_PATH.matches(it) }
+    val url = remember(path, type, remoteRequestsEnabled) {
+        path?.takeIf { remoteRequestsEnabled && IMAGE_PATH.matches(it) }
             ?.let { "https://image.tmdb.org/t/p/${type.size}$it" }
     }
-    val request = remember(context, url) { ImageRequest.Builder(context).data(url).crossfade(false).build() }
     Box(modifier.background(Color(0xFF253043)), contentAlignment = Alignment.Center) {
         Text(description, color = Color(0xFFB8C5D9), modifier = Modifier.padding(12.dp), maxLines = 5, overflow = TextOverflow.Ellipsis)
         if (url != null) {
+            val request = remember(context, url) {
+                ImageRequest.Builder(context).data(url).crossfade(false).build()
+            }
             AsyncImage(
                 model = request,
                 imageLoader = CatalogImages.get(context),

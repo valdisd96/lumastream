@@ -231,6 +231,10 @@ internal class PlaybackSubtitles(
     }
 
     fun loadOnline(candidate: ProviderSubtitle) {
+        if (!configuration.isOnlineSubtitlesConfigured) {
+            onError("Online subtitles are disabled. Enable and configure OpenSubtitles in Settings to use them.")
+            return
+        }
         val apiKey = configuration.openSubtitlesApiKey
         load("Downloading selected subtitle…", manual = true, language = candidate.language) {
             val result = provider.download(apiKey, candidate)
@@ -242,8 +246,8 @@ internal class PlaybackSubtitles(
         val current = player ?: error("Open a video first.")
         val token = playback ?: error("Open a video first.")
         val config = configuration
-        require(config.openSubtitlesApiKey.isNotBlank()) {
-            "LumaStream's OpenSubtitles application key is not configured. The developer must configure its consumer key with Allow anonymous downloads enabled. Search only runs when you request it."
+        require(config.isOnlineSubtitlesConfigured) {
+            "Online subtitles are disabled or not configured. Enable and configure OpenSubtitles in Settings to use them."
         }
         val catalog = selection
         // Only this explicit user action may fetch file ends for release-specific hash matching.
