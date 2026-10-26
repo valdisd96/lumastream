@@ -2,9 +2,9 @@
 
 ### From discovery to playback. One Android app.
 
-Browse movies and series, pick a torrent source, and start watching **before the download finishes**. LumaStream runs on your TV, phone or tablet — with the torrent engine built in, not on a separate server.
+Open a magnet link or torrent without registering, or connect an optional movie catalog, and start watching **before the download finishes**. LumaStream runs on your TV, phone or tablet — with the torrent engine built in, not on a separate server.
 
-**[Download v0.8.0 preview](https://github.com/valdisd96/lumastream/releases/tag/v0.8.0)** · [Getting started](#getting-started) · [What's new](docs/releases/0.8.0.md) · [Report a problem](https://github.com/valdisd96/lumastream/issues)
+**[Download v0.9.0 preview](https://github.com/valdisd96/lumastream/releases/tag/v0.9.0)** · [Getting started](#getting-started) · [What's new](docs/releases/0.9.0.md) · [Report a problem](https://github.com/valdisd96/lumastream/issues)
 
 **Android 9+ · Android TV / Google TV · Phones & tablets · No separate streaming server**
 
@@ -14,12 +14,12 @@ Browse movies and series, pick a torrent source, and start watching **before the
 
 ## Why LumaStream?
 
-- **Find something to watch.** Search movies and series, browse popular and top-rated collections, or explore by genre. Metadata and artwork come from TMDB.
+- **Start without accounts.** Open magnet links, HTTPS torrent URLs or `.torrent` documents. Optionally connect TMDB to search movies and series, browse collections and explore genres.
 - **Keep your place.** Save titles to Watch later and return to your viewing history, with separate resume points for each episode.
 - **Choose how to play.** Pick a source yourself, or choose a quality/language group and let automatic selection try available candidates.
 - **Watch your way.** TV remote and touch controls, seeking, audio-track selection, subtitles and subtitle timing adjustment.
 - **Use less disk space.** A rolling torrent cache means the whole video does not have to fit on your device. Choose a 1, 2, 4 or 8 GiB cache in Settings.
-- **Keep it self-contained.** One APK, an embedded torrent engine, and no mandatory companion server. Internet access and third-party catalog/source services are still needed.
+- **Keep it self-contained.** One APK, an embedded torrent engine, and no mandatory companion server or catalog account. Network playback still needs internet access; optional services receive requests when used.
 
 LumaStream is a **preview**, not a subscription streaming service. It does not include movies, credentials or guaranteed sources. Only play content you are authorized to obtain and share.
 
@@ -42,8 +42,8 @@ Screenshots use real app screens. Sintel © Blender Foundation, [CC BY 3.0](http
 
 ### 1. Install the APK
 
-1. Open the **[v0.8.0 download page](https://github.com/valdisd96/lumastream/releases/tag/v0.8.0)** and expand **Assets** if needed.
-2. Download **`lumastream-0.8.0-universal.apk`**. The same file supports TVs, phones and tablets running Android 9 or newer.
+1. Open the **[v0.9.0 download page](https://github.com/valdisd96/lumastream/releases/tag/v0.9.0)** and expand **Assets** if needed.
+2. Download **`lumastream-0.9.0-universal.apk`**. The same file supports TVs, phones and tablets running Android 9 or newer.
 3. On a phone/tablet, open the downloaded APK. On a TV, transfer it to the TV and open it with an APK installer or file manager.
 4. If Android asks, allow **Install unknown apps** for the app opening the APK, then install LumaStream. You can turn that permission off afterward.
 
@@ -61,28 +61,32 @@ shasum -a 256 -c SHA256SUMS
 With an authorized Android device connected:
 
 ```sh
-adb -s DEVICE install -r lumastream-0.8.0-universal.apk
+adb -s DEVICE install -r lumastream-0.9.0-universal.apk
 ```
 
 Replace `DEVICE` with the device identifier shown by `adb devices`. Developers can find build and signing instructions in the [maintainer guide](docs/maintainer-guide.md#build-and-install).
 
 </details>
 
-**Development branch:** the next version adds a credential-free Home with **Open magnet / torrent** and explicit, default-off TMDB and online-subtitle integrations. Existing configured installations retain their enabled services. This is not yet included in the v0.8.0 APK linked above; its setup instructions below remain applicable.
+### 2. Start without an account
 
-### 2. Set up the catalog
+On Home, select **Open magnet / torrent**, enter a magnet link or HTTPS torrent URL, or choose a `.torrent` document. Select a video when the file list appears. File selection requires a system document picker; links remain available on TVs without one. Archive is also accessible without a catalog key.
+
+TMDB and online subtitles start **Off**. Embedded subtitle tracks, matching subtitle files in the torrent and SRT/WebVTT import do not require an account. Existing configured installations retain their enabled services; switching a service Off preserves its key and library data but stops requests to it, including TMDB artwork.
+
+### Optional: connect the movie catalog
 
 1. Create or sign in to your [TMDB account](https://www.themoviedb.org/), then open its [API settings](https://www.themoviedb.org/settings/api) to request API access.
 2. Copy your **API Read Access Token** — not the shorter API key.
-3. Open **LumaStream → Settings**, enter the token, choose your catalog language, and select **Save settings**.
+3. Open **LumaStream → Settings**, select **Catalog: TMDB**, enter the token, choose your catalog language, and select **Save settings**.
 
 Your token stays in the app's private settings. Do not share it in screenshots or bug reports. TMDB supplies descriptions and artwork, **not video streams**.
 
 Source lookup uses a separate, configurable Stremio-compatible provider, initially Torrentio. Optional additional providers are off by default. Their availability and terms may change; a catalog listing does not guarantee a playable source.
 
-### 3. Pick a title and watch
+### 3. Watch
 
-Open **Search** or **Discover**, choose a title, and select **Find sources**. For a series, choose the season and episode first. Select a source, or **Watch automatically…** and choose a quality/language group. Startup depends on available peers and your connection.
+With TMDB enabled, open **Search** or **Discover**, choose a title, and select **Find sources**. For a series, choose the season and episode first. Select a source, or **Watch automatically…** and choose a quality/language group. Direct torrent opening does not need these catalog steps. Startup depends on available peers and your connection.
 
 - **On TV:** navigate with the D-pad and OK. During playback, OK pauses/resumes, Left/Right seek, Up opens subtitles, and Down moves to player actions.
 - **On phones/tablets:** tap the video for playback controls; use the timeline, audio settings and CC menu. Rotation keeps the current playback session.
@@ -106,7 +110,7 @@ Internet Archive search is also available from Home. Review an item's rights and
 
 Found a problem? [Open an issue](https://github.com/valdisd96/lumastream/issues) with the app version, device/Android version, what you did and what happened. Remove tokens, private URLs and personal information from screenshots and logs.
 
-- [Release highlights](docs/releases/0.8.0.md) and [full changelog](CHANGELOG.md)
+- [Release highlights](docs/releases/0.9.0.md) and [full changelog](CHANGELOG.md)
 - [Build, architecture, verification and maintainer guide](docs/maintainer-guide.md)
 - [Release-writing guide](docs/releases.md)
 - [Third-party notices](app/src/main/assets/THIRD_PARTY_NOTICES.md)
