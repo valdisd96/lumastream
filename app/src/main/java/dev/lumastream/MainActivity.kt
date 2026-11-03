@@ -246,20 +246,39 @@ class MainActivity : ComponentActivity() {
                 textSize = 20f
                 setTextColor(android.graphics.Color.WHITE)
             })
-            addView(android.widget.Button(this@MainActivity).apply {
+            addView(android.widget.TextView(this@MainActivity).apply {
                 text = "Subtitles provided by OpenSubtitles.com"
                 textSize = 14f
-                setOnClickListener {
-                    try {
-                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.opensubtitles.com")))
-                    } catch (_: ActivityNotFoundException) {
-                        AlertDialog.Builder(this@MainActivity).setMessage("Visit https://www.opensubtitles.com")
-                            .setPositiveButton("OK", null).show()
-                    }
-                }
             })
         }
         return AlertDialog.Builder(this).setCustomTitle(heading)
+            .setNeutralButton("Provider website…", null)
+    }
+
+    private fun AlertDialog.Builder.showOnlineResultDialog() {
+        val dialog = show()
+        // Keep the results open beneath the confirmation; Cancel must not repeat a search.
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            val confirmation = AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Leave playback?")
+                    .setMessage("This opens the OpenSubtitles website in a browser, not subtitle search. Leaving LumaStream stops playback. To download subtitles here, cancel and choose a search result.")
+                    .setPositiveButton("Open browser") { _, _ ->
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.opensubtitles.com")))
+                        } catch (_: ActivityNotFoundException) {
+                            AlertDialog.Builder(this@MainActivity).setMessage("Visit https://www.opensubtitles.com")
+                                .setPositiveButton("OK", null).show()
+                        }
+                    }
+                    .setNegativeButton("Cancel", null).show()
+            confirmation.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus()
+        }
+        if (dialog.listView != null) {
+            dialog.listView.requestFocus()
+            dialog.listView.setSelection(0)
+        } else {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
+        }
     }
 
     private fun showOnlineSubtitles() {
@@ -268,10 +287,12 @@ class MainActivity : ComponentActivity() {
         subtitleSearch?.cancel()
         val progress = onlineSubtitleDialog("Find subtitles")
             .setMessage("Searching the selected language for this video/release…")
+            .setNeutralButton(null, null)
             .setNegativeButton("Cancel") { _, _ -> subtitleSearch?.cancel() }
             .setOnCancelListener { subtitleSearch?.cancel() }.create()
         progress.setOnDismissListener { finishPlayerMenu() }
         progress.show()
+        progress.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus()
         subtitleSearch = lifecycleScope.launch {
             try {
                 val results = model.findOnlineSubtitles()
@@ -280,14 +301,14 @@ class MainActivity : ComponentActivity() {
                 if (results.isEmpty()) {
                     onlineSubtitleDialog("No matches")
                         .setMessage("No matching subtitles in the selected language. No other language was substituted.")
-                        .setPositiveButton("OK", null).setOnDismissListener { finishPlayerMenu() }.show()
+                        .setPositiveButton("OK", null).setOnDismissListener { finishPlayerMenu() }.showOnlineResultDialog()
                 } else {
                     onlineSubtitleDialog("Choose subtitles · ${results.size} matches")
                         .setItems(results.map {
                             "${if (it.hashMatch) "Exact video hash · " else ""}${it.release}\n${it.filename}${if (it.hearingImpaired) " · SDH" else ""}${it.fps?.let { fps -> " · $fps fps" } ?: ""}"
                         }.toTypedArray()) { _, index ->
                             if (model.screen.value.player === player) model.loadOnlineSubtitle(results[index])
-                        }.setNegativeButton("Cancel", null).setOnDismissListener { finishPlayerMenu() }.show()
+                        }.setNegativeButton("Cancel", null).setOnDismissListener { finishPlayerMenu() }.showOnlineResultDialog()
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -295,7 +316,7 @@ class MainActivity : ComponentActivity() {
                 if (model.screen.value.player === player && !isFinishing && !isDestroyed) {
                     onlineSubtitleDialog("Subtitle search")
                         .setMessage(failure.message ?: "Search failed. Try again later.")
-                        .setPositiveButton("OK", null).setOnDismissListener { finishPlayerMenu() }.show()
+                        .setPositiveButton("OK", null).setOnDismissListener { finishPlayerMenu() }.showOnlineResultDialog()
                 }
             } finally {
                 progress.dismiss()
