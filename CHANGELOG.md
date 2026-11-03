@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.2 — 2026-11-03 (local signed preview)
+
+- Keep online subtitle search and download inside the player: focus the first result instead of the provider attribution. Move the website link to a separate footer action with an explicit browser-exit confirmation, defaulting to Cancel; cancelling preserves the results.
+- Remove the website action from search progress, focus Cancel while searching, and focus OK on empty/error results. Keep explicit result selection rather than automatically downloading a potentially incorrect provider match.
+- Prepare version code 13 with the existing release certificate. Release build, all 162 JVM tests, release lint, signature and four-ABI/16 KB packaging checks passed.
+- Verified on WK03K: real Sintel search returned two results with the first focused; remote OK downloaded and selected `sintel_en.srt` without opening a browser. A downloaded cue rendered at 01:58; pause/resume and normal shutdown passed. Website confirmation defaulted to Cancel and returned to the existing results. In-place installation retained the package UID and original install time; online configuration remained usable. No new audible-output claim.
+
 ## 0.9.1 — 2026-10-26 (pre-release)
 
 - Make enabled prefetch continue during playback and buffering as well as pause, within the existing disk-cache budget. Retain saved preferences, demand-read priority and session-only cleanup; stop speculative scheduling on player error or inactive playback.

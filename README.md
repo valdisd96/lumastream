@@ -92,6 +92,8 @@ With TMDB enabled, open **Search** or **Discover**, choose a title, and select *
 - **On phones/tablets:** tap the video for playback controls; use the timeline, audio settings and CC menu. Rotation keeps the current playback session.
 - **Next time:** use **Watch later** for saved titles and **History** to continue a movie or episode.
 
+With online subtitles configured, choose **CC / Up → Find subtitles online**, then select a result to download and apply it inside the player. **Provider website…** is a separate, confirmed browser action, not the search button. Results are not automatically applied because provider matches can be incorrect.
+
 Leaving the app stops playback and clears the torrent session cache. Your saved titles, settings and catalog history remain; resuming may need to buffer again.
 
 ## Good to know
