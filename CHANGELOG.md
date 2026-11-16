@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Run Android CI on the owner's persistent self-hosted runner (`[self-hosted, Linux, X64, hetzner-ci]`) only for owner pushes to `main`, owner manual runs and owner-authored same-repository PRs; fork and Dependabot PRs are skipped. Pin actions by SHA, drop persisted checkout credentials and bound Gradle memory for a 4 GiB host. CI still never signs, releases or deploys.
+
 ## 0.9.2 — 2026-11-03 (local signed preview)
 
 - Keep online subtitle search and download inside the player: focus the first result instead of the provider attribution. Move the website link to a separate footer action with an explicit browser-exit confirmation, defaulting to Cancel; cancelling preserves the results.
