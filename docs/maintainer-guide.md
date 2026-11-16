@@ -163,7 +163,20 @@ Use `adb -s DEVICE` if multiple devices are connected. Configure and authorize A
 
 The native checker example uses the macOS NDK host directory; use `linux-x86_64` on Linux. It rejects missing/extra ABIs, missing torrent/storage JNI libraries, incorrect ELF class/machine, 64-bit ELF alignment below 16 KB, and invalid 16 KB APK alignment.
 
-The Android GitHub Actions workflow builds and lints pull requests and `main`, and uploads a debug APK. No empty test suite is presented as behavioral verification.
+The Android GitHub Actions workflow builds, unit-tests and lints trusted pull requests, `main` pushes and manual runs, verifies native packaging, and uploads a debug-signed APK artifact. No empty test suite is presented as behavioral verification. CI never signs, publishes a GitHub release or deploys to a device; release signing stays local as described below.
+
+#### Self-hosted CI runner
+
+The job runs on the owner's persistent self-hosted runner labelled `[self-hosted, Linux, X64, hetzner-ci]`. Because the runner keeps state between jobs, untrusted code must never execute there:
+
+- Jobs run only when both `github.actor` and `github.triggering_actor` are the owner (`valdisd96`): pushes to `main`, manual `workflow_dispatch` runs, and pull requests **authored by the owner from a branch of this repository**. Fork and Dependabot pull requests are skipped; a skipped job is **not** a passing check. Re-running a workflow as another user is also skipped.
+- These conditions live in workflow YAML that a pull request can change, so they are not a security boundary on their own. Repository settings require approval for workflow runs from all external contributors: **never approve fork workflow runs**. Review external changes and import them into an owner branch instead. Do not add `pull_request_target` or `workflow_run` triggers that execute PR code.
+- Checkout does not persist credentials; the job token is `contents: read`. No signing keys or other secrets are available to the workflow.
+- The host serializes jobs across its runners, so `timeout-minutes` includes queue wait.
+
+Host requirements (runner user, Ubuntu 26.04 x64): `bash`, `curl`, `unzip`, `git`, and `python3` ≥ 3.8 for `scripts/verify-native-packaging.py` (standard library only); glibc-based Linux for the NDK `linux-x86_64` toolchain and CMake. JDK 17 (Temurin) is installed by `actions/setup-java`. `android-actions/setup-android` downloads command-line tools and installs `platform-tools`, `platforms;android-35`, `build-tools;35.0.0`, `ndk;27.0.12077973` and `cmake;3.22.1` into the runner user's persistent `~/.android/sdk` (about 4–5 GiB); Gradle 8.9 and dependencies are cached in `~/.gradle` (about 2–3 GiB). Allow at least 15 GiB free disk for SDK, caches and build outputs. The build requires outbound HTTPS to GitHub, `dl.google.com`, `services.gradle.org`, Google Maven, Maven Central and the Gradle plugin portal.
+
+For a 4 GiB RAM host, CI overrides `gradle.properties` without changing local defaults: a single-use Gradle JVM (`--no-daemon`, `-Xmx2g`, metaspace 768 MiB), Kotlin compiled in-process (no separate Kotlin daemon), at most two workers and no parallel project execution. Swap of 2–4 GiB is recommended for lint peaks; if the build is OOM-killed, lower workers to 1 before raising the heap.
 
 ### Signing a release
 

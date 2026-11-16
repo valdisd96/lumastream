@@ -1,34 +1,79 @@
 name: Android
 
+# Jobs run on the owner's persistent self-hosted runner. Only trusted owner code may
+# execute there: owner pushes to main, owner manual runs, and owner-authored PRs from
+# branches of this repository. Fork and Dependabot PRs are skipped; a skipped job is
+# not a passing check. These conditions live in PR-controlled YAML, so they are not a
+# boundary by themselves: never approve fork workflow runs. Import reviewed external
+# changes into an owner branch instead. Do not add pull_request_target or workflow_run.
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    if: >-
+      github.repository == 'valdisd96/lumastream' &&
+      github.actor == 'valdisd96' &&
+      github.triggering_actor == 'valdisd96' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.user.login == 'valdisd96' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: [self-hosted, Linux, X64, hetzner-ci]
+    # Includes waiting for the host-wide job lock shared with the other runners.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      NDK_VERSION: 27.0.12077973
+      BUILD_TOOLS_VERSION: 35.0.0
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      # Installs into the runner user's persistent ~/.android/sdk and reuses it.
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973 cmake;3.22.1'
-      - uses: gradle/actions/setup-gradle@v4
+          log-accepted-android-sdk-licenses: false
+      # The persistent runner keeps ~/.gradle locally; the remote Actions cache would
+      # only duplicate it. Wrapper checksum validation remains enabled.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-disabled: true
       - name: Build and check
-        run: ./gradlew assembleDebug testDebugUnitTest lintDebug
+        # Bounded for a 4 GiB host: one single-use Gradle JVM, Kotlin compiled
+        # in-process (no separate Kotlin daemon) and at most two workers.
+        run: |
+          ./gradlew --no-daemon \
+            "-Dorg.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8" \
+            -Dorg.gradle.workers.max=2 \
+            -Dorg.gradle.parallel=false \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            assembleDebug testDebugUnitTest lintDebug
       - name: Verify native packaging
         run: |
           python3 scripts/verify-native-packaging.py app/build/outputs/apk/debug/app-debug.apk \
-            --readelf "$ANDROID_HOME/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
-            --zipalign "$ANDROID_HOME/build-tools/35.0.0/zipalign"
-      - uses: actions/upload-artifact@v4
+            --readelf "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            --zipalign "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/zipalign"
+      # Debug-signed development APK only. CI never signs, releases or deploys.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lumastream-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
